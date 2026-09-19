@@ -244,6 +244,105 @@ export function stackSummary(input) {
   return { active: active.length, totals, unknownCosts, overlap: Object.entries(capabilities).filter(([, count]) => count > 1).map(([capability, count]) => ({ capability, count })) };
 }
 
+export const CHAT_KEY = 'coffeenator-preview-chat-v1';
+export const MAX_CHAT_TURNS = 40;
+export const MAX_TURN_LENGTH = 24000;
+export const CHAT_TIMEOUT_MS = 60000;
+export const CHAT_COPY = {
+  notConfigured: 'Chat backend is not configured. Set ANTHROPIC_API_KEY on the server.',
+  network: 'The reply did not arrive. Check your connection and retry.',
+  timeout: 'The reply took longer than 60 seconds and was cancelled. Retry to send the same conversation.',
+  unreadable: 'The server sent a response this preview could not read. Retry to send the same conversation.',
+  rejected: 'The server rejected this chat request.',
+  interrupted: 'The last message has not been answered yet. Retry to send it again.',
+};
+
+const boundedErrorMessage = (value, fallback) => typeof value === 'string' && value.trim() ? value.trim().slice(0, 300) : fallback;
+
+export function normalizeConversation(input) {
+  if (!Array.isArray(input)) return [];
+  return input.flatMap((turn) => {
+    if (!turn || !['user', 'assistant'].includes(turn.role) || typeof turn.content !== 'string' || !turn.content.trim()) return [];
+    return [{ role: turn.role, content: turn.content.slice(0, MAX_TURN_LENGTH) }];
+  }).slice(-MAX_CHAT_TURNS);
+}
+
+export function appendChatTurn(turns, role, content) {
+  return normalizeConversation([...(Array.isArray(turns) ? turns : []), { role, content }]);
+}
+
+export function chatRequestBody(turns, system = '') {
+  const messages = normalizeConversation(turns);
+  while (messages.length && messages[0].role !== 'user') messages.shift();
+  while (messages.length && messages[messages.length - 1].role !== 'user') messages.pop();
+  if (!messages.length) throw new Error('Type a message before sending.');
+  const instructions = typeof system === 'string' ? system.trim() : '';
+  return instructions ? { messages, system: instructions } : { messages };
+}
+
+export function parseChatResponse(status, body) {
+  const data = body && body.ok === true && body.schema_version === 1 && body.data && typeof body.data === 'object' ? body.data : null;
+  if (status === 200 && data && typeof data.reply === 'string' && data.reply.trim()) {
+    const usage = data.usage && typeof data.usage === 'object' ? data.usage : {};
+    return {
+      ok: true,
+      reply: data.reply.slice(0, MAX_TURN_LENGTH),
+      model: typeof data.model === 'string' ? data.model.slice(0, 80) : '',
+      usage: {
+        input_tokens: Number.isFinite(usage.input_tokens) ? usage.input_tokens : null,
+        output_tokens: Number.isFinite(usage.output_tokens) ? usage.output_tokens : null,
+      },
+    };
+  }
+  const error = body && body.ok === false && body.error && typeof body.error === 'object' ? body.error : null;
+  if (error && status === 503 && error.code === 'PROVIDER_ERROR' && error.retryable !== true) {
+    return { ok: false, retryable: false, message: CHAT_COPY.notConfigured };
+  }
+  if (error) {
+    const retryable = error.retryable === true;
+    return { ok: false, retryable, message: boundedErrorMessage(error.message, retryable ? CHAT_COPY.network : CHAT_COPY.rejected) };
+  }
+  return { ok: false, retryable: !(status >= 400 && status < 500), message: CHAT_COPY.unreadable };
+}
+
+export async function requestChatReply(turns, { fetchImpl = globalThis.fetch, signal, system } = {}) {
+  const body = JSON.stringify(chatRequestBody(turns, system));
+  let response;
+  try { response = await fetchImpl('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal }); }
+  catch { return { ok: false, retryable: true, message: signal?.aborted ? CHAT_COPY.timeout : CHAT_COPY.network }; }
+  let payload = null;
+  try { payload = await response.json(); } catch {}
+  return parseChatResponse(response.status, payload);
+}
+
+export function createChat() { return { turns: [], status: 'idle', error: null }; }
+
+export function normalizeChat(input) {
+  const turns = normalizeConversation(input && typeof input === 'object' && !Array.isArray(input) ? input.turns : null);
+  if (turns.length && turns[turns.length - 1].role === 'user') {
+    return { turns, status: 'error', error: { retryable: true, message: CHAT_COPY.interrupted } };
+  }
+  return { turns, status: 'idle', error: null };
+}
+
+export const serializeChat = (chat) => JSON.stringify({ turns: normalizeConversation(chat?.turns) });
+
+export function chatWithUserTurn(chat, content) {
+  return { turns: appendChatTurn(chat.turns, 'user', content), status: 'sending', error: null };
+}
+
+export function chatRetrying(chat) {
+  return { ...chat, status: 'sending', error: null };
+}
+
+export function chatWithReply(chat, reply) {
+  return { turns: appendChatTurn(chat.turns, 'assistant', reply), status: 'idle', error: null };
+}
+
+export function chatWithError(chat, error) {
+  return { ...chat, status: 'error', error: { retryable: error?.retryable === true, message: boundedErrorMessage(error?.message, CHAT_COPY.network) } };
+}
+
 export const EXPORT_GUIDES = {
   ChatGPT: {
     url: 'https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data',

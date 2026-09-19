@@ -6,8 +6,9 @@ import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { Config } from './config.js';
 import { buildMcpServer } from './mcp.js';
+import { registerChatRoute } from './chat.js';
 
-export function buildApp(config: Config, options: { logStream?: Writable } = {}) {
+export function buildApp(config: Config, options: { logStream?: Writable; chatFetch?: typeof fetch } = {}) {
   const app = Fastify({
     genReqId: () => randomUUID(),
     requestIdHeader: false,
@@ -54,6 +55,7 @@ export function buildApp(config: Config, options: { logStream?: Writable } = {})
     });
   });
   app.get('/health', async () => ({ status: 'ok', mode: 'local' }));
+  registerChatRoute(app, config, options.chatFetch ?? fetch);
   app.all('/mcp', async (request, reply) => {
     reply.hijack();
     const rawRequest = Object.assign(request.raw, { method: request.method, url: request.url });

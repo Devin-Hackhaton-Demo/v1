@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { errorEnvelope, handleChatRequest, MAX_BODY_BYTES } from '../../../api/_lib/anthropic.mjs';
 
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
@@ -16,20 +17,61 @@ const files = new Map([
   ...['github', 'supabase', 'claude', 'chatgpt', 'composio-black', 'composio-white'].map((name) => [`/icons/${name}.svg`, [`icons/${name}.svg`, 'image/svg+xml']]),
 ]);
 
-export function createPreviewServer() {
+function sendJson(response, status, payload, headers = {}) {
+  const body = JSON.stringify(payload);
+  response.writeHead(status, { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+  response.end(body);
+}
+
+async function handleChatEndpoint(request, response, env, fetchImpl) {
+  if (request.method !== 'POST') {
+    sendJson(response, 405, errorEnvelope('VALIDATION_ERROR', 'Use POST to talk to /api/chat.', false), { Allow: 'POST' });
+    return;
+  }
+  const declaredLength = Number(request.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    sendJson(response, 400, errorEnvelope('VALIDATION_ERROR', 'Request body may be at most 256 KiB.', false));
+    return;
+  }
+  let body;
+  try {
+    const chunks = [];
+    let received = 0;
+    for await (const chunk of request) {
+      received += chunk.length;
+      if (received > MAX_BODY_BYTES) {
+        sendJson(response, 400, errorEnvelope('VALIDATION_ERROR', 'Request body may be at most 256 KiB.', false));
+        return;
+      }
+      chunks.push(chunk);
+    }
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    sendJson(response, 400, errorEnvelope('VALIDATION_ERROR', 'Request body must be valid JSON.', false));
+    return;
+  }
+  const { status, payload } = await handleChatRequest(body, env, fetchImpl);
+  sendJson(response, status, payload);
+}
+
+export function createPreviewServer({ env = process.env, fetchImpl = fetch } = {}) {
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
+    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
+    let pathname;
+    try { pathname = new URL(request.url, 'http://127.0.0.1').pathname; } catch { response.writeHead(400).end(); return; }
+    if (pathname === '/api/chat') {
+      await handleChatEndpoint(request, response, env, fetchImpl);
+      return;
+    }
     if (!['GET', 'HEAD'].includes(request.method)) {
       response.writeHead(405, { Allow: 'GET, HEAD', 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('This design preview does not accept data or API requests.');
       return;
     }
-    let pathname;
-    try { pathname = new URL(request.url, 'http://127.0.0.1').pathname; } catch { response.writeHead(400).end(); return; }
     const asset = files.get(pathname);
     if (!asset) {
       response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });

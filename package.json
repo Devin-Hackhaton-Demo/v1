@@ -25,7 +25,8 @@
     "db:push": "dotenv -- sh -c 'supabase db push --db-url \"$SUPABASE_DB_URL\"'",
     "db:types": "dotenv -- sh -c 'supabase gen types typescript --db-url \"$SUPABASE_DB_URL\" --schema public' > packages/db/src/types.ts",
     "seed": "tsx --env-file=.env scripts/seed.ts",
-    "smoke": "tsx --env-file=.env scripts/smoke.ts"
+    "smoke": "tsx --env-file=.env scripts/smoke.ts",
+    "demo": "node --env-file=.env docs/design/preview/server.mjs"
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",

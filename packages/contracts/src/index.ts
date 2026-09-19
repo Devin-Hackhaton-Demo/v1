@@ -37,6 +37,28 @@ export const serverInfoSchema = z.strictObject({
 });
 export const serverInfoResponseSchema = createResponseSchema(serverInfoSchema);
 
+export const chatMessageSchema = z.strictObject({
+  role: z.enum(['user', 'assistant']),
+  content: z.string().min(1).max(65_536),
+});
+export const chatRequestSchema = z.strictObject({
+  messages: z.array(chatMessageSchema).min(1).max(40),
+  system: z.string().max(8_192).optional(),
+});
+export const chatDataSchema = z.strictObject({
+  reply: z.string(),
+  model: z.string(),
+  usage: z.strictObject({
+    input_tokens: z.int().nonnegative(),
+    output_tokens: z.int().nonnegative(),
+  }),
+});
+export const chatResponseSchema = createResponseSchema(chatDataSchema);
+
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 export type ServiceError = z.infer<typeof errorSchema>;
 export type ServerInfoResponse = z.infer<typeof serverInfoResponseSchema>;
+export type ChatMessage = z.infer<typeof chatMessageSchema>;
+export type ChatRequest = z.infer<typeof chatRequestSchema>;
+export type ChatData = z.infer<typeof chatDataSchema>;
+export type ChatResponse = z.infer<typeof chatResponseSchema>;

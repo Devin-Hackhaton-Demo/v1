@@ -27,6 +27,10 @@ export interface UploadArtifactInput {
  * A limit túllépése explicit hiba, nincs csendes csonkolás (§4).
  */
 export async function uploadArtifact(client: DbClient, input: UploadArtifactInput): Promise<Tables<'artifacts'>> {
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(input.fileName) || input.fileName === '.' || input.fileName === '..') {
+    throw new Error('VALIDATION_ERROR: érvénytelen fileName (engedélyezett: A-Za-z0-9._-, max 128 karakter)');
+  }
+
   const bytes = typeof input.content === 'string' ? new TextEncoder().encode(input.content) : input.content;
 
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_ARTIFACT_BYTES) {

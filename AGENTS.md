@@ -17,7 +17,7 @@ v1 eltéréseket). Ez a fájl a gyakorlati tudnivalókat rögzíti.
 | --- | --- |
 | `npm run build` | `packages/db` typecheck + build (tsc) |
 | `npm run seed` | Idempotens seed: teszt userek + demo projektek |
-| `npm run smoke` | 19 élő ellenőrzés a Supabase DB ellen (RLS, trigger, hash) |
+| `npm run smoke` | 40 élő ellenőrzés a Supabase DB ellen (RLS, trigger, hash, RPC-k, Vault) |
 | `npm run db:push` | Új migrációk alkalmazása az élő DB-re |
 | `npm run db:types` | Típusgenerálás — Dockert igényel, ezen a gépen nincs! |
 
@@ -140,8 +140,8 @@ Details and exact signatures: PROJECT_CONTEXT.md section 15. New rules:
 - The existing `PROJECT_CONTEXT.md` and `docs/design/README.md` describe the separate server-rendered backend MVP. The user subsequently approved a standalone, interactive product-design preview; do not change backend scope, auth, contracts, root manifests, or the original design tokens to implement this preview.
 - This preview has no runtime dependencies and uses browser ES modules and Node.js built-ins. Run from the repository root with `node docs/design/preview/server.mjs`. It binds to loopback, on port 4173 by default; use `PORT=4174` if necessary.
 - Run checks with `node --test docs/design/preview/*.test.mjs`, `node --check docs/design/preview/app.mjs`, and `git diff --check`.
-- Google login, Google connectors, live AI responses, and backend synchronization are not implemented. Never simulate successful authentication or connected-account states. Keep upcoming capabilities explicitly labelled.
-- Profile preferences and a resized avatar are stored in localStorage. Imported context is only in sessionStorage for the current tab. No user content is sent to the preview server or an AI provider. Keep import review, size/type validation, explicit consent, and source provenance intact.
+- Google login, Google connectors, and backend synchronization are not implemented. Chat replies ARE live: the UI posts the conversation to same-origin `POST /api/chat`, which proxies the Anthropic API server-side (key never reaches the browser). Never simulate successful authentication or connected-account states. Keep upcoming capabilities explicitly labelled.
+- Profile preferences and a resized avatar are stored in localStorage. Imported context is only in sessionStorage for the current tab. Memory imports and profile data are never sent anywhere; chat messages are sent to the server-side Anthropic proxy only when the user presses Send. Keep import review, size/type validation, explicit consent, and source provenance intact.
 - All in-app graphics are served locally; there are no external font, image, analytics, or tracking requests. Google product PNGs come from gstatic, Composio marks from https://brand.composio.dev/logo (preserve black/white variants), GitHub/Supabase/Claude marks from the CC0 Simple Icons repository, and the ChatGPT mark from Wikimedia Commons. Provider trademarks still belong to their owners; these marks identify tools, not partnerships.
 - Import tutorials were checked against https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data and https://support.claude.com/en/articles/9450526-export-your-claude-data on 2026-09-19. Quick memory summaries may be partial. Full account exports must be extracted and reviewed; this preview does not accept ZIP, HTML, or PDF and does not migrate accounts or subscriptions.
 - Before sharing the preview, check desktop and mobile layouts, dark/light/system modes, keyboard navigation, dialog dismissal, reduced motion, avatar upload, context import/export, and rejection of invalid files.

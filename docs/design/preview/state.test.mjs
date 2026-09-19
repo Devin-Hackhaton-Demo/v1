@@ -5,6 +5,9 @@ import {
   earnMilestone, validateContextFile, escapeHtml, addSource, buildExport,
   normalizeSources, CONNECTORS, MAX_CONTEXT_BYTES, COMPANIONS,
   normalizeConnection, sourceCoverage, normalizeStack, stackSummary, sampleConnections,
+  MAX_CHAT_TURNS, CHAT_COPY, normalizeConversation, appendChatTurn, chatRequestBody,
+  parseChatResponse, requestChatReply, createChat, normalizeChat, serializeChat,
+  chatWithUserTurn, chatWithReply, chatWithError, chatRetrying,
 } from './state.mjs';
 import { companionArt, serviceMark } from './art.mjs';
 
@@ -211,4 +214,141 @@ test('portable exports default to English and disclose source provenance', () =>
   assert.equal(result.sources[0].source_verified, false);
   assert.equal(result.sources[0].text, 'My own note');
   assert.equal(result.credentials, undefined);
+});
+
+test('conversations append in order and keep only the 40 most recent turns', () => {
+  let turns = [];
+  for (let index = 0; index < 23; index++) {
+    turns = appendChatTurn(turns, 'user', `question ${index}`);
+    turns = appendChatTurn(turns, 'assistant', `answer ${index}`);
+  }
+  assert.equal(turns.length, MAX_CHAT_TURNS);
+  assert.deepEqual(turns[0], { role: 'user', content: 'question 3' });
+  assert.deepEqual(turns.at(-1), { role: 'assistant', content: 'answer 22' });
+});
+
+test('restored conversations drop malformed turns instead of trusting storage', () => {
+  const restored = normalizeConversation([
+    { role: 'user', content: 'Hello' },
+    { role: 'system', content: 'not an allowed role' },
+    { role: 'assistant', content: '   ' },
+    { role: 'assistant', content: 42 },
+    null,
+    { role: 'assistant', content: 'Hi.' },
+  ]);
+  assert.deepEqual(restored, [{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi.' }]);
+  assert.deepEqual(normalizeConversation('not-an-array'), []);
+});
+
+test('chat request bodies start and end with a user turn and never exceed 40 messages', () => {
+  const body = chatRequestBody([{ role: 'assistant', content: 'stray greeting' }, { role: 'user', content: 'First question' }]);
+  assert.deepEqual(body, { messages: [{ role: 'user', content: 'First question' }] });
+  assert.equal(chatRequestBody([{ role: 'user', content: 'Q' }], '  Be concise.  ').system, 'Be concise.');
+  let turns = [];
+  for (let index = 0; index < 22; index++) {
+    turns = appendChatTurn(turns, 'user', `question ${index}`);
+    turns = appendChatTurn(turns, 'assistant', `answer ${index}`);
+  }
+  turns = appendChatTurn(turns, 'user', 'latest question');
+  const long = chatRequestBody(turns).messages;
+  assert.ok(long.length <= MAX_CHAT_TURNS);
+  assert.equal(long[0].role, 'user');
+  assert.equal(long.at(-1).role, 'user');
+  assert.equal(long.at(-1).content, 'latest question');
+  assert.throws(() => chatRequestBody([{ role: 'assistant', content: 'only a reply' }]), /message/);
+});
+
+test('successful replies require the exact contract envelope — no fake success', () => {
+  const ok = parseChatResponse(200, { schema_version: 1, request_id: 'r1', ok: true, data: { reply: 'Hello!', model: 'claude-test', usage: { input_tokens: 12, output_tokens: 5 } } });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.reply, 'Hello!');
+  assert.equal(ok.model, 'claude-test');
+  assert.deepEqual(ok.usage, { input_tokens: 12, output_tokens: 5 });
+  for (const body of [null, { ok: true }, { schema_version: 1, ok: true, data: { reply: '  ' } }, { schema_version: 2, ok: true, data: { reply: 'hi' } }]) {
+    assert.equal(parseChatResponse(200, body).ok, false);
+  }
+});
+
+test('an unconfigured backend shows the setup instruction without a retry offer', () => {
+  const result = parseChatResponse(503, { ok: false, error: { code: 'PROVIDER_ERROR', message: 'Chat backend is not configured.', retryable: false } });
+  assert.equal(result.ok, false);
+  assert.equal(result.retryable, false);
+  assert.equal(result.message, 'Chat backend is not configured. Set ANTHROPIC_API_KEY on the server.');
+});
+
+test('retryable provider errors offer retry and validation errors do not', () => {
+  const upstream = parseChatResponse(502, { ok: false, error: { code: 'PROVIDER_ERROR', message: 'Upstream request failed.', retryable: true } });
+  assert.equal(upstream.ok, false);
+  assert.equal(upstream.retryable, true);
+  const invalid = parseChatResponse(400, { ok: false, error: { code: 'VALIDATION_ERROR', message: 'messages is required.', retryable: false } });
+  assert.equal(invalid.retryable, false);
+  assert.equal(invalid.message, 'messages is required.');
+  assert.equal(parseChatResponse(502, undefined).retryable, true);
+  assert.equal(parseChatResponse(405, undefined).retryable, false);
+});
+
+test('chat state transitions never invent a reply and keep the conversation for retry', () => {
+  const sending = chatWithUserTurn(createChat(), 'Hello?');
+  assert.equal(sending.status, 'sending');
+  assert.deepEqual(sending.turns, [{ role: 'user', content: 'Hello?' }]);
+  const failed = chatWithError(sending, { retryable: true, message: 'The reply did not arrive.' });
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.error.retryable, true);
+  assert.deepEqual(failed.turns, sending.turns);
+  const retrying = chatRetrying(failed);
+  assert.equal(retrying.status, 'sending');
+  assert.equal(retrying.error, null);
+  assert.deepEqual(retrying.turns, sending.turns);
+  const done = chatWithReply(retrying, 'Hi there.');
+  assert.equal(done.status, 'idle');
+  assert.equal(done.error, null);
+  assert.deepEqual(done.turns.at(-1), { role: 'assistant', content: 'Hi there.' });
+});
+
+test('restoring a chat never resumes a fake in-flight or error state', () => {
+  const answered = normalizeChat(JSON.parse(serializeChat({ turns: [{ role: 'user', content: 'Q' }, { role: 'assistant', content: 'A' }], status: 'sending', error: { message: 'stale' } })));
+  assert.equal(answered.status, 'idle');
+  assert.equal(answered.error, null);
+  const unanswered = normalizeChat({ turns: [{ role: 'user', content: 'Q' }] });
+  assert.equal(unanswered.status, 'error');
+  assert.equal(unanswered.error.retryable, true);
+  assert.equal(unanswered.error.message, CHAT_COPY.interrupted);
+  assert.deepEqual(normalizeChat(null), createChat());
+  assert.equal(JSON.parse(serializeChat(chatWithError(createChat(), { message: 'transient detail' }))).error, undefined);
+});
+
+test('sending posts the contract body through the injected fetch and returns the reply', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return { status: 200, json: async () => ({ schema_version: 1, request_id: 'r2', ok: true, data: { reply: 'Brewed and ready.', model: 'claude-test', usage: { input_tokens: 3, output_tokens: 7 } } }) };
+  };
+  const result = await requestChatReply([{ role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi.' }, { role: 'user', content: 'More?' }], { fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.reply, 'Brewed and ready.');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/chat');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['content-type'], 'application/json');
+  const sent = JSON.parse(calls[0].options.body);
+  assert.equal(sent.messages.length, 3);
+  assert.equal(sent.messages[0].role, 'user');
+  assert.equal(sent.messages.at(-1).role, 'user');
+  assert.equal(sent.system, undefined);
+});
+
+test('network failures and timeouts surface as retryable errors, never success', async () => {
+  const network = await requestChatReply([{ role: 'user', content: 'Hi' }], { fetchImpl: async () => { throw new TypeError('fetch failed'); } });
+  assert.equal(network.ok, false);
+  assert.equal(network.retryable, true);
+  assert.equal(network.message, CHAT_COPY.network);
+  const controller = new AbortController();
+  controller.abort();
+  const timedOut = await requestChatReply([{ role: 'user', content: 'Hi' }], { fetchImpl: async () => { throw Object.assign(new Error('Aborted'), { name: 'AbortError' }); }, signal: controller.signal });
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.retryable, true);
+  assert.equal(timedOut.message, CHAT_COPY.timeout);
+  const unreadable = await requestChatReply([{ role: 'user', content: 'Hi' }], { fetchImpl: async () => ({ status: 200, json: async () => { throw new SyntaxError('bad json'); } }) });
+  assert.equal(unreadable.ok, false);
+  assert.equal(unreadable.retryable, true);
 });
