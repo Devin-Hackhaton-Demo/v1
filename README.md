@@ -92,6 +92,10 @@ Expected results (exact counts — fewer passes means a gate silently vanished):
 - `npm run test:e2e` — 20 PASS, 0 FAIL; claim latency ≤ 15 s
 - UI tests: `node --test docs/design/preview/*.test.mjs`
 
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs install, build, unit,
+api, typecheck and UI checks on every push to main and every pull request.
+The live-DB gates are excluded from CI (they need Supabase credentials).
+
 **Warning:** `smoke`, `test:statemachine` and `test:e2e` run against the live,
 shared Supabase database (in disposable projects with cleanup). Never run
 `test:statemachine` and `test:e2e` in parallel — run claiming is global and
@@ -116,6 +120,10 @@ site.
 - `context_entries` and `decisions` are immutable, even for the service role;
   corrections are new entries with supersede links.
 - Logs are sanitized: no payloads, tokens, keys or raw upstream errors.
+- `POST /api/chat` is rate limited (10 requests/min per IP, sliding window).
+  On Vercel the limiter is per warm instance — for a strict global limit add a
+  shared store (e.g. Vercel KV). Replies are tuned server-side for concise,
+  plain-text output (no markdown), in the user's language.
 
 ## Further reading
 

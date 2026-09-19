@@ -12,6 +12,30 @@ const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const UPSTREAM_TIMEOUT_MS = 60_000;
 const UPSTREAM_MAX_TOKENS = 1024;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+export const DEFAULT_SYSTEM_PROMPT = 'You are Coffeenator\'s assistant. Coffeenator is a personal AI home: it has a Chat screen (this conversation), a Connectors screen for linking services like Google, GitHub or Notion, and a Memory screen where the user imports and stores personal context for their AI tools. Reply in plain conversational text. Do not use markdown formatting: no asterisks, no bold or italics, no headings, no bullet characters. If a list is genuinely needed, write short numbered lines like \'1.\' and \'2.\'. Be brief and to the point: short sentences, short paragraphs, no filler. Explain clearly so a non-technical reader understands. Always answer in the same language the user writes in. Only include code when the user explicitly asks for code.';
+
+type RateLimit = { limit: number; windowMs: number };
+
+function createRateLimiter({ limit, windowMs }: RateLimit) {
+  const requestTimes = new Map<string, number[]>();
+  return (ip: string, now: number): { retryAfterSeconds: number } | undefined => {
+    for (const [key, timestamps] of requestTimes) {
+      const recent = timestamps.filter((timestamp) => now - timestamp < windowMs);
+      if (recent.length === 0) requestTimes.delete(key);
+      else requestTimes.set(key, recent);
+    }
+    const recent = requestTimes.get(ip) ?? [];
+    const oldest = recent[0];
+    if (recent.length >= limit && oldest !== undefined) {
+      return { retryAfterSeconds: Math.max(1, Math.ceil((oldest + windowMs - now) / 1000)) };
+    }
+    requestTimes.set(ip, [...recent, now]);
+    return undefined;
+  };
+}
 
 const upstreamMessageSchema = z.looseObject({
   model: z.string().min(1),
@@ -22,7 +46,15 @@ const upstreamMessageSchema = z.looseObject({
   }),
 });
 
-export function registerChatRoute(app: FastifyInstance, config: Config, fetchImpl: typeof fetch = fetch) {
+export function registerChatRoute(
+  app: FastifyInstance,
+  config: Config,
+  fetchImpl: typeof fetch = fetch,
+  options: { rateLimit?: RateLimit } = {},
+) {
+  const checkRateLimit = createRateLimiter(
+    options.rateLimit ?? { limit: RATE_LIMIT_MAX_REQUESTS, windowMs: RATE_LIMIT_WINDOW_MS },
+  );
   app.post('/api/chat', async (request, reply) => {
     const sendError = (statusCode: number, error: ServiceError) => reply.code(statusCode).send(
       chatResponseSchema.parse({
@@ -33,6 +65,15 @@ export function registerChatRoute(app: FastifyInstance, config: Config, fetchImp
       }),
     );
 
+    const limited = checkRateLimit(request.ip, Date.now());
+    if (limited) {
+      reply.header('retry-after', String(limited.retryAfterSeconds));
+      return sendError(429, {
+        code: 'LIMIT_EXCEEDED',
+        message: 'Too many requests. Please wait a moment and try again.',
+        retryable: true,
+      });
+    }
     const parsed = chatRequestSchema.safeParse(request.body);
     if (!parsed.success
       || parsed.data.messages[0]?.role !== 'user'
@@ -60,7 +101,7 @@ export function registerChatRoute(app: FastifyInstance, config: Config, fetchImp
           model: anthropicModel,
           max_tokens: UPSTREAM_MAX_TOKENS,
           messages: parsed.data.messages,
-          ...(parsed.data.system === undefined ? {} : { system: parsed.data.system }),
+          system: parsed.data.system && parsed.data.system.length > 0 ? parsed.data.system : DEFAULT_SYSTEM_PROMPT,
         }),
         signal: controller.signal,
       });

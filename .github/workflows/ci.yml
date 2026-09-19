@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: read-only access to repository contents.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Domain unit tests (vitest)
+        run: npm test
+
+      - name: Contracts + API tests
+        run: npm run test:api
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Design preview tests
+        run: node --test docs/design/preview/*.test.mjs
+
+      - name: Design preview syntax check
+        run: node --check docs/design/preview/app.mjs
+
+      # NOT run in CI: npm run smoke, test:statemachine, test:e2e, seed, db:push —
+      # they need live Supabase credentials and hit the live database.

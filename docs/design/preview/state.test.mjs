@@ -5,7 +5,7 @@ import {
   earnMilestone, validateContextFile, escapeHtml, addSource, buildExport,
   normalizeSources, CONNECTORS, MAX_CONTEXT_BYTES, COMPANIONS,
   normalizeConnection, sourceCoverage, normalizeStack, stackSummary, sampleConnections,
-  MAX_CHAT_TURNS, CHAT_COPY, normalizeConversation, appendChatTurn, chatRequestBody,
+  MAX_CHAT_TURNS, MAX_TURN_LENGTH, CHAT_COPY, normalizeConversation, appendChatTurn, chatRequestBody,
   parseChatResponse, requestChatReply, createChat, normalizeChat, serializeChat,
   chatWithUserTurn, chatWithReply, chatWithError, chatRetrying,
 } from './state.mjs';
@@ -225,6 +225,17 @@ test('conversations append in order and keep only the 40 most recent turns', () 
   assert.equal(turns.length, MAX_CHAT_TURNS);
   assert.deepEqual(turns[0], { role: 'user', content: 'question 3' });
   assert.deepEqual(turns.at(-1), { role: 'assistant', content: 'answer 22' });
+});
+
+test('chat turns are bounded to the backend limit of 65536 characters per message', () => {
+  assert.equal(MAX_TURN_LENGTH, 65536);
+  const [turn] = normalizeConversation([{ role: 'user', content: 'a'.repeat(MAX_TURN_LENGTH + 1) }]);
+  assert.equal(turn.content.length, MAX_TURN_LENGTH);
+  const kept = normalizeConversation([{ role: 'user', content: 'b'.repeat(MAX_TURN_LENGTH) }]);
+  assert.equal(kept[0].content.length, MAX_TURN_LENGTH);
+  const reply = parseChatResponse(200, { schema_version: 1, ok: true, data: { reply: 'c'.repeat(MAX_TURN_LENGTH + 100) } });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.reply.length, MAX_TURN_LENGTH);
 });
 
 test('restored conversations drop malformed turns instead of trusting storage', () => {

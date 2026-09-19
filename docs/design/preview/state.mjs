@@ -44,11 +44,11 @@ export const CONNECTORS = [
   { id: 'gmail', name: 'Gmail', category: 'Google', featured: true, status: 'soon', description: 'Less inbox noise. More clarity.', benefit: 'Summarize selected emails and prepare thoughtful replies with the right context.', permission: 'Read selected emails. Sending a message will require separate permission and approval.', icon: 'gmail' },
   { id: 'calendar', name: 'Google Calendar', category: 'Google', featured: true, status: 'soon', description: 'Make room for what matters.', benefit: 'Plan your priorities around the events already in your day.', permission: 'Read events in your chosen calendars. Creating or changing an event will require approval.', icon: 'calendar' },
   { id: 'drive', name: 'Google Drive', category: 'Google', featured: true, status: 'soon', description: 'Your files, part of the conversation.', benefit: 'Work with the documents you choose, without uploading them again each time.', permission: 'Read approved files. The real Google authorization screen will show the exact access requested.', icon: 'drive' },
-  { id: 'claude', name: 'Claude', category: 'AI tools', status: 'soon', description: 'Bring along what it knows about you.', benefit: 'A direct connection is planned. You can already try importing a selected text export in this preview.', permission: 'No automatic access to chat history. Only the export you choose is read locally.', icon: 'claude' },
+  { id: 'claude', name: 'Claude', category: 'AI tools', status: 'soon', description: 'Bring along what it knows about you.', benefit: 'A direct connection is planned. You can already try importing a selected text export.', permission: 'No automatic access to chat history. Only the export you choose is read locally.', icon: 'claude' },
   { id: 'chatgpt', name: 'ChatGPT', category: 'AI tools', status: 'soon', description: 'A new chapter, not a blank page.', benefit: 'A direct connection is planned. A selected text memory export can already be imported locally.', permission: 'Your full history is not automatically available. A future connection will still need explicit authorization.', icon: 'chatgpt' },
   { id: 'notion', name: 'Notion', category: 'Work', status: 'soon', description: 'Pages and project notes', benefit: 'Work with pages you explicitly choose to share.', permission: 'Access to selected pages only. Writing or changing content will require separate permission.', icon: 'notion' },
   { id: 'github', name: 'GitHub', category: 'Development', status: 'soon', description: 'Repositories and issues', benefit: 'Bring approved project context into your workflow. The repository currently documents this integration as a plan, not a live implementation.', permission: 'Selected repositories only. Creating an issue requires a reviewed payload and explicit approval.', icon: 'github' },
-  { id: 'supabase', name: 'Supabase', category: 'Development', status: 'soon', description: 'Project and database context', benefit: 'Access explicitly approved project resources through a future integration.', permission: 'No database or project access is granted by this preview. Credentials must remain on the server.', icon: 'supabase' },
+  { id: 'supabase', name: 'Supabase', category: 'Development', status: 'soon', description: 'Project and database context', benefit: 'Access explicitly approved project resources through a future integration.', permission: 'No database or project access is granted by the app yet. Credentials must remain on the server.', icon: 'supabase' },
 ];
 
 const MILESTONES = ['style', 'profile', 'companion', 'import', 'note', 'export'];
@@ -135,7 +135,7 @@ export function validateContextFile(name, input) {
 
 export function addSource(sources, source) {
   if (sources.some((item) => item.hash === source.hash)) return sources;
-  if (sources.length >= MAX_SOURCES) throw new Error('This preview supports up to 5 sources. Remove one before adding another.');
+  if (sources.length >= MAX_SOURCES) throw new Error('You can add up to 5 sources. Remove one before adding another.');
   return [...sources, source];
 }
 
@@ -246,13 +246,13 @@ export function stackSummary(input) {
 
 export const CHAT_KEY = 'coffeenator-preview-chat-v1';
 export const MAX_CHAT_TURNS = 40;
-export const MAX_TURN_LENGTH = 24000;
+export const MAX_TURN_LENGTH = 65536;
 export const CHAT_TIMEOUT_MS = 60000;
 export const CHAT_COPY = {
   notConfigured: 'Chat backend is not configured. Set ANTHROPIC_API_KEY on the server.',
   network: 'The reply did not arrive. Check your connection and retry.',
   timeout: 'The reply took longer than 60 seconds and was cancelled. Retry to send the same conversation.',
-  unreadable: 'The server sent a response this preview could not read. Retry to send the same conversation.',
+  unreadable: 'The server sent a response the app could not read. Retry to send the same conversation.',
   rejected: 'The server rejected this chat request.',
   interrupted: 'The last message has not been answered yet. Retry to send it again.',
 };

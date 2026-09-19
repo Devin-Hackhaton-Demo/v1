@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createPreviewServer } from './server.mjs';
-import { callAnthropic, validateChatRequest } from '../../../api/_lib/anthropic.mjs';
+import { callAnthropic, createRateLimiter, DEFAULT_SYSTEM_PROMPT, validateChatRequest } from '../../../api/_lib/anthropic.mjs';
 
 async function serve(t, options) {
   const server = createPreviewServer(options);
@@ -114,6 +114,45 @@ test('callAnthropic sends the documented request and concatenates text blocks', 
   assert.deepEqual(sent, { model: 'claude-sonnet-5', max_tokens: 1024, messages: [{ role: 'user', content: 'Hi' }], system: 'Short.' });
 });
 
+test('callAnthropic applies the default system prompt when the caller provides none', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return anthropicResponse();
+  };
+  await callAnthropic({ messages: [{ role: 'user', content: 'Hi' }] }, { ANTHROPIC_API_KEY: 'unit-test-key' }, fetchImpl);
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(calls[0].init.body).system, DEFAULT_SYSTEM_PROMPT);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /Coffeenator/);
+  assert.match(DEFAULT_SYSTEM_PROMPT, /same language/);
+});
+
+test('callAnthropic keeps a caller-provided system prompt unchanged', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return anthropicResponse();
+  };
+  await callAnthropic({ messages: [{ role: 'user', content: 'Hi' }], system: 'Answer only about coffee.' }, { ANTHROPIC_API_KEY: 'unit-test-key' }, fetchImpl);
+  assert.equal(calls.length, 1);
+  const sent = JSON.parse(calls[0].init.body);
+  assert.equal(sent.system, 'Answer only about coffee.');
+  assert.notEqual(sent.system, DEFAULT_SYSTEM_PROMPT);
+});
+
+test('createRateLimiter enforces a per-IP sliding window and recovers after it passes', () => {
+  let current = 1_000_000;
+  const limiter = createRateLimiter({ limit: 2, windowMs: 60000, now: () => current });
+  assert.deepEqual(limiter.check('10.0.0.1'), { allowed: true, retryAfterSeconds: 0 });
+  assert.deepEqual(limiter.check('10.0.0.1'), { allowed: true, retryAfterSeconds: 0 });
+  const blocked = limiter.check('10.0.0.1');
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfterSeconds >= 1 && blocked.retryAfterSeconds <= 60);
+  assert.equal(limiter.check('10.0.0.2').allowed, true, 'other IPs are counted independently');
+  current += 60001;
+  assert.deepEqual(limiter.check('10.0.0.1'), { allowed: true, retryAfterSeconds: 0 }, 'stale entries are pruned once the window passes');
+});
+
 test('callAnthropic reports upstream failures without leaking upstream details', async () => {
   const fetchImpl = async () => new Response('fictional secret upstream body', { status: 500 });
   await assert.rejects(
@@ -182,4 +221,34 @@ test('POST /api/chat hides provider failures behind a retryable envelope', async
   assert.equal(payload.error.code, 'PROVIDER_ERROR');
   assert.equal(payload.error.retryable, true);
   assert.doesNotMatch(payload.error.message, /fictional upstream|529|integration-test-key/);
+});
+
+test('POST /api/chat rate limits the 11th rapid request from the same IP', async (t) => {
+  const base = await serve(t, {
+    env: { ANTHROPIC_API_KEY: 'integration-test-key' },
+    fetchImpl: async () => anthropicResponse(),
+    rateLimiter: createRateLimiter(),
+  });
+  const body = JSON.stringify({ messages: [{ role: 'user', content: 'Hi' }] });
+  for (let i = 0; i < 10; i += 1) {
+    const response = await postChat(base, body);
+    assert.equal(response.status, 200, `request ${i + 1} stays within the default limit`);
+    await response.json();
+  }
+  const limited = await postChat(base, body);
+  assert.equal(limited.status, 429);
+  const retryAfter = Number(limited.headers.get('retry-after'));
+  assert.ok(Number.isInteger(retryAfter) && retryAfter >= 1 && retryAfter <= 60, 'Retry-After is a plausible number of seconds');
+  const payload = await limited.json();
+  assert.equal(payload.schema_version, 1);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, 'LIMIT_EXCEEDED');
+  assert.equal(payload.error.message, 'Too many requests. Please wait a moment and try again.');
+  assert.equal(payload.error.retryable, true);
+});
+
+test('the rate limit does not bleed between servers because each gets its own limiter', async (t) => {
+  const base = await serve(t, { env: { ANTHROPIC_API_KEY: 'integration-test-key' }, fetchImpl: async () => anthropicResponse() });
+  const response = await postChat(base, JSON.stringify({ messages: [{ role: 'user', content: 'Hi' }] }));
+  assert.equal(response.status, 200);
 });

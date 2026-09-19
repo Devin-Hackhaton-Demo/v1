@@ -11,6 +11,44 @@ const UPSTREAM_TIMEOUT_MS = 60000;
 
 export const MAX_BODY_BYTES = 262144;
 
+export const DEFAULT_SYSTEM_PROMPT = [
+  "You are Coffeenator's assistant. Coffeenator is a personal AI home:",
+  'it has a Chat screen (this conversation), a Connectors screen for linking',
+  'services like Google, GitHub or Notion, and a Memory screen where the user',
+  'imports and stores personal context for their AI tools.',
+  'Reply in plain conversational text.',
+  'Do not use markdown formatting: no asterisks, no bold or italics, no headings, no bullet characters.',
+  "If a list is genuinely needed, write short numbered lines like '1.' and '2.'.",
+  'Be brief and to the point: short sentences, short paragraphs, no filler.',
+  'Explain clearly so a non-technical reader understands.',
+  'Always answer in the same language the user writes in.',
+  'Only include code when the user explicitly asks for code.',
+].join(' ');
+
+export const RATE_LIMIT_DEFAULTS = { limit: 10, windowMs: 60000 };
+
+export function createRateLimiter({ limit = RATE_LIMIT_DEFAULTS.limit, windowMs = RATE_LIMIT_DEFAULTS.windowMs, now = Date.now } = {}) {
+  const hits = new Map();
+  return {
+    check(ip) {
+      const key = typeof ip === 'string' && ip.length > 0 ? ip : 'unknown';
+      const current = now();
+      const cutoff = current - windowMs;
+      for (const [entryKey, timestamps] of hits) {
+        while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+        if (timestamps.length === 0) hits.delete(entryKey);
+      }
+      const timestamps = hits.get(key) ?? [];
+      if (timestamps.length >= limit) {
+        return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((timestamps[0] + windowMs - current) / 1000)) };
+      }
+      timestamps.push(current);
+      hits.set(key, timestamps);
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
+  };
+}
+
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 export function validateChatRequest(body) {
@@ -45,6 +83,7 @@ export function validateChatRequest(body) {
 export async function callAnthropic({ messages, system }, env, fetchImpl = fetch) {
   if (!env || typeof env.ANTHROPIC_API_KEY !== 'string' || env.ANTHROPIC_API_KEY.length === 0) throw new Error('ANTHROPIC_API_KEY is not configured.');
   const model = env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+  const effectiveSystem = typeof system === 'string' && system.length > 0 ? system : DEFAULT_SYSTEM_PROMPT;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
   let response;
@@ -56,7 +95,7 @@ export async function callAnthropic({ messages, system }, env, fetchImpl = fetch
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
         messages: messages.map(({ role, content }) => ({ role, content })),
-        ...(system ? { system } : {}),
+        system: effectiveSystem,
       }),
       signal: controller.signal,
     });

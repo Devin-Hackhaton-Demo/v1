@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
+import Fastify from 'fastify';
 import { chatResponseSchema } from '@demo/contracts';
 import { buildApp } from '../src/app.js';
+import { DEFAULT_SYSTEM_PROMPT, registerChatRoute } from '../src/chat.js';
 import { loadConfig } from '../src/config.js';
 
 const API_KEY = 'sk-ant-KEY_SENTINEL';
@@ -53,6 +57,14 @@ function createChatApp(t: TestContext, options: {
   });
   t.after(() => app.close());
   return { app, calls };
+}
+
+function createRateLimitedApp(t: TestContext, rateLimit: { limit: number; windowMs: number }) {
+  const app = Fastify({ genReqId: () => randomUUID() });
+  const config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', ANTHROPIC_API_KEY: API_KEY });
+  registerChatRoute(app, config, (async () => anthropicResponse()) as typeof fetch, { rateLimit });
+  t.after(() => app.close());
+  return app;
 }
 
 function anthropicResponse() {
@@ -174,7 +186,7 @@ test('proxies a chat exchange and concatenates upstream text blocks', async (t) 
   }
 });
 
-test('falls back to the default Anthropic model and omits an absent system prompt', async (t) => {
+test('falls back to the default Anthropic model and the default system prompt', async (t) => {
   const { app, calls } = createChatApp(t, { responder: anthropicResponse });
   const response = await app.inject({
     method: 'POST', url: '/api/chat',
@@ -186,7 +198,46 @@ test('falls back to the default Anthropic model and omits an absent system promp
   assert.ok(call);
   const body: unknown = JSON.parse(String(call.init.body));
   assert.ok(typeof body === 'object' && body !== null);
-  assert.equal('system' in body, false);
+  assert.equal((body as { system?: unknown }).system, DEFAULT_SYSTEM_PROMPT);
   assert.equal((body as { model?: unknown }).model, 'claude-sonnet-5');
   assert.equal((body as { max_tokens?: unknown }).max_tokens, 1024);
+});
+
+test('lets a caller-provided system prompt override the default', async (t) => {
+  const { app, calls } = createChatApp(t, { responder: anthropicResponse });
+  const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  assert.equal(response.statusCode, 200);
+  const call = calls[0];
+  assert.ok(call);
+  const body: unknown = JSON.parse(String(call.init.body));
+  assert.ok(typeof body === 'object' && body !== null);
+  assert.equal((body as { system?: unknown }).system, 'Be concise.');
+  assert.notEqual((body as { system?: unknown }).system, DEFAULT_SYSTEM_PROMPT);
+});
+
+test('rate limits repeated chat requests with a retryable envelope and Retry-After', async (t) => {
+  const app = createRateLimitedApp(t, { limit: 2, windowMs: 60_000 });
+  for (let i = 0; i < 2; i += 1) {
+    const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+    assert.equal(response.statusCode, 200);
+  }
+  const limited = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  assert.equal(limited.statusCode, 429);
+  const envelope = chatResponseSchema.parse(limited.json());
+  assert.equal(envelope.ok, false);
+  if (!envelope.ok) {
+    assert.deepEqual(envelope.error, {
+      code: 'LIMIT_EXCEEDED', message: 'Too many requests. Please wait a moment and try again.', retryable: true,
+    });
+  }
+  assert.match(String(limited.headers['retry-after']), /^\d+$/);
+  assert.ok(Number(limited.headers['retry-after']) >= 1);
+});
+
+test('allows chat requests again once the rate limit window has passed', async (t) => {
+  const app = createRateLimitedApp(t, { limit: 1, windowMs: 50 });
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 429);
+  await sleep(75);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 200);
 });
