@@ -6,6 +6,7 @@ import {
   sourceCoverage, sampleConnections, normalizeStack, stackSummary,
   CHAT_KEY, CHAT_TIMEOUT_MS, CHAT_COPY, createChat, normalizeChat, serializeChat,
   chatWithUserTurn, chatWithReply, chatWithError, chatRetrying, requestChatReply,
+  mcpClients, requestMcpStatus,
   KEYS_KEY, LEGACY_COMPOSIO_KEY, KEY_GUIDES, CONNECTOR_KEYS, GOOGLE_TOOLKITS, normalizeKeys, maskKey, requestKeyCheck,
 } from './state.mjs';
 import { icon, brandMark, serviceMark, companionArt } from './art.mjs';
@@ -60,6 +61,8 @@ let connectorSearch = '';
 let connectorFilter = 'All';
 let composerDraft = '';
 let chat = normalizeChat(readStorage('sessionStorage', CHAT_KEY));
+let mcp = { status: 'idle', tools: [], server: '', protocolVersion: '', checkedAt: '', message: '' };
+let mcpClient = 'claude-code';
 let keys = normalizeKeys(readStorage('localStorage', KEYS_KEY), readStorage('localStorage', LEGACY_COMPOSIO_KEY));
 let chatAbort = null;
 let chatGeneration = 0;
@@ -335,7 +338,7 @@ function keyDialog() {
 }
 
 function connectorsPage() {
-  return `<div class="page"><div class="page-heading"><h1>Connectors</h1><div class="provider-label"><span>Your keys</span>${keysPill()}${help('composio')}</div></div><div class="section-tabs" role="group" aria-label="Connector view"><button class="section-tab${selected(connectorTab === 'connections')}" data-action="connector-tab" data-value="connections" aria-pressed="${connectorTab === 'connections'}">${icon('plug')}Connections</button><button class="section-tab${selected(connectorTab === 'stack')}" data-action="connector-tab" data-value="stack" aria-pressed="${connectorTab === 'stack'}">${icon('cpu')}My AI stack</button></div>${connectorTab === 'stack' ? stackPage() : registryPage()}</div>`;
+  return `<div class="page"><div class="page-heading"><h1>Connectors</h1><div class="provider-label"><span>Your keys</span>${keysPill()}${help('composio')}</div></div><div class="section-tabs" role="group" aria-label="Connector view"><button class="section-tab${selected(connectorTab === 'connections')}" data-action="connector-tab" data-value="connections" aria-pressed="${connectorTab === 'connections'}">${icon('plug')}Connections</button><button class="section-tab${selected(connectorTab === 'stack')}" data-action="connector-tab" data-value="stack" aria-pressed="${connectorTab === 'stack'}">${icon('cpu')}My AI stack</button><button class="section-tab${selected(connectorTab === 'mcp')}" data-action="connector-tab" data-value="mcp" aria-pressed="${connectorTab === 'mcp'}">${icon('spark')}MCP server</button></div>${({ stack: stackPage, mcp: mcpPage })[connectorTab]?.() ?? registryPage()}</div>`;
 }
 
 function registryPage() {
@@ -344,6 +347,33 @@ function registryPage() {
   return `<section class="registry-section"><div class="section-heading"><h2>${showSamples ? 'Sample connections' : 'Your connections'}<span class="count-label">${showSamples ? rows.length : CONNECTORS.filter(isConnected).length}</span></h2><div class="inline-group"><label class="sample-toggle"><input type="checkbox" id="sample-connections" ${showSamples ? 'checked' : ''}><span>Sample data</span></label>${help('sample')}</div></div>
       ${rows.length ? `<div class="sample-notice">${icon('info')}Fictional records · not live accounts</div><div class="registry-table-wrap"><table class="registry-table"><thead><tr><th>App</th><th><span>Connection${help('connection')}</span></th><th><span>Health${help('health')}</span></th><th><span>Sync${help('sync')}</span></th><th>Connected</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>${rows.map((record) => { const connector = connectorFor(record.toolkit); const state = connectionPresentation(record); return `<tr><td class="registry-app"><span class="service-box">${mark(connector.icon)}</span><span><strong>${connector.name}</strong><small>Sample account</small></span></td><td data-label="Connection">${statePill(...state.connection)}</td><td data-label="Health">${statePill(...state.health)}</td><td data-label="Sync">${statePill(...state.sync)}</td><td data-label="Connected" class="date-cell">${dateLabel(record.connectedAt)}</td><td class="registry-more"><button class="icon-button" data-action="connection-details" data-value="${record.id}" aria-label="View ${connector.name} sample details">${icon('more')}</button></td></tr>`; }).join('')}</tbody></table></div>` : keyRows()}</section>
       <section class="catalog-section" id="catalog"><div class="section-heading"><h2>Add a connection</h2><label class="search-field">${icon('search')}<span class="sr-only">Search apps</span><input type="search" id="connector-search" value="${esc(connectorSearch)}" placeholder="Search apps"></label></div><div class="filter-tabs" role="group" aria-label="App category">${['All', 'Google', 'AI tools', 'Work', 'Development'].map((filter) => `<button class="filter-tab${selected(connectorFilter === filter)}" data-action="filter" data-value="${filter}" aria-pressed="${connectorFilter === filter}">${filter}</button>`).join('')}</div><div class="catalog-grid">${visible.map((connector) => `<article class="connector-card"><div class="connector-card-top"><span class="service-box">${mark(connector.icon)}</span>${connectorPill(connector)}</div><h3>${connector.name}</h3><div class="connector-card-bottom"><button class="text-button" data-action="connector" data-value="${connector.id}">Details</button><button class="button secondary compact" data-action="key-connect" data-value="${connector.id}">${isConnected(connector) ? 'Manage' : 'Connect'}</button></div></article>`).join('')}</div>${visible.length ? '' : '<div class="empty-inline">No apps found.</div>'}</section>`;
+}
+
+const mcpUrl = () => `${location.origin}/mcp`;
+
+async function checkMcp() {
+  if (mcp.status === 'checking') return;
+  mcp = { ...mcp, status: 'checking', message: '' }; render();
+  mcp = { tools: [], server: '', protocolVersion: '', message: '', ...await requestMcpStatus() };
+  render();
+}
+
+function mcpPage() {
+  if (mcp.status === 'idle') queueMicrotask(checkMcp);
+  const url = mcpUrl();
+  const pill = mcp.status === 'online' ? statePill(`Online · ${mcp.tools.length} tool${mcp.tools.length === 1 ? '' : 's'}`, 'success', 'check') : mcp.status === 'offline' ? statePill('Unreachable', 'danger') : statePill('Checking…', 'info');
+  const meta = mcp.status === 'online' ? `${esc(mcp.server)}${mcp.protocolVersion ? ` · protocol ${esc(mcp.protocolVersion)}` : ''} · checked ${esc(timeLabel(mcp.checkedAt))}` : mcp.status === 'offline' ? esc(mcp.message) : 'Contacting the server…';
+  const client = mcpClients(url).find(({ id }) => id === mcpClient) || mcpClients(url)[0];
+  return `<section class="mcp-section"><div class="section-heading"><div class="inline-group"><h2>Connect your AI to Coffeenator</h2><span class="small-label">MCP</span></div><button class="button secondary compact" data-action="mcp-check" ${mcp.status === 'checking' ? 'disabled' : ''}>Check</button></div>
+    <div class="key-row mcp-status"><span class="service-box">${icon('spark')}</span><div class="key-meta"><strong>Server status</strong><small>${meta}</small></div>${pill}</div>
+    <div class="mcp-endpoint"><label for="mcp-url">Server URL</label><div class="mcp-copy-row"><input id="mcp-url" readonly value="${esc(url)}" aria-describedby="mcp-url-hint"><button class="button primary compact" data-action="mcp-copy" data-value="url">Copy URL</button></div><p class="field-hint" id="mcp-url-hint">${icon('info')}Public · no sign-in or API key needed · 10 requests per minute per IP. The chat tool uses this app’s AI credit.</p></div>
+    <h3 class="mcp-subheading">What to add in your app</h3>
+    <div class="filter-tabs" role="group" aria-label="MCP client">${mcpClients(url).map((item) => `<button class="filter-tab${selected(item.id === client.id)}" data-action="mcp-client" data-value="${item.id}" aria-pressed="${item.id === client.id}">${esc(item.name)}</button>`).join('')}</div>
+    <ol class="guide-steps">${client.steps.map((step, index) => `<li><span>${index + 1}</span><div><p>${esc(step)}</p></div></li>`).join('')}</ol>
+    <div class="copy-prompt mcp-snippet"><pre tabindex="0" aria-label="${esc(client.name)} configuration">${esc(client.snippet)}</pre><button class="button secondary compact" data-action="mcp-copy" data-value="snippet">Copy</button></div>
+    <h3 class="mcp-subheading">Available tools</h3>
+    ${mcp.tools.length ? `<div class="key-list">${mcp.tools.map((tool) => `<article class="key-row"><span class="service-box">${icon(tool.name === 'chat' ? 'chat' : 'info')}</span><div class="key-meta"><strong><code>${esc(tool.name)}</code></strong><small>${esc(tool.description)}</small></div></article>`).join('')}</div>` : `<div class="empty-inline">${mcp.status === 'checking' ? 'Loading tools…' : 'Tools appear here once the server answers.'}</div>`}
+  </section>`;
 }
 
 function stackPage() {
@@ -560,7 +590,15 @@ const actions = {
   'key-connect': (value) => { if (CONNECTOR_KEYS[value]) showDialog('key', { id: value, draft: '', busy: false }); },
   'key-check': (provider) => { if (keys[provider]) return checkKey(provider, keys[provider].apiKey); },
   'key-disconnect': (provider) => { if (!keys[provider]) return; const next = { ...keys }; delete next[provider]; saveKeys(next); if (modalState) { modalState.error = ''; renderDialog(); } render(); notify(`${KEY_GUIDES[provider].name} key removed from this browser.`); },
-  'connector-tab': (value) => { if (['connections', 'stack'].includes(value)) { connectorTab = value; render(); } },
+  'connector-tab': (value) => { if (['connections', 'stack', 'mcp'].includes(value)) { connectorTab = value; render(); } },
+  'mcp-check': () => checkMcp(),
+  'mcp-client': (value) => { if (mcpClients(mcpUrl()).some(({ id }) => id === value)) { mcpClient = value; render(); } },
+  'mcp-copy': async (value) => {
+    const text = value === 'url' ? mcpUrl() : mcpClients(mcpUrl()).find(({ id }) => id === mcpClient)?.snippet;
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); notify(value === 'url' ? 'MCP server URL copied.' : 'Configuration copied.'); }
+    catch { notify('Clipboard unavailable. Select the text and copy it manually.', 'info'); }
+  },
   filter: (value) => { connectorFilter = value; render(); },
   browse: () => document.querySelector('#catalog')?.scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' }),
   connector: (value) => { if (CONNECTORS.some(({ id }) => id === value)) showDialog('connector', { id: value }); },

@@ -471,3 +471,43 @@ export async function requestKeyCheck(provider, apiKey, { fetchImpl = globalThis
   }
   return { status: data.reason === 'unauthorized' ? 'unauthorized' : 'unreachable', account: '', checkedAt };
 }
+
+// Public MCP endpoint served by this app at /mcp (api/mcp.mjs). The Connectors
+// page shows its live status and what to paste into each MCP client.
+export function mcpClients(url) {
+  return [
+    { id: 'claude-code', name: 'Claude Code', steps: ['Run this command in your terminal.', 'Start Claude Code and type /mcp to see the coffeenator server.'], snippet: `claude mcp add --transport http coffeenator ${url}` },
+    { id: 'claude-desktop', name: 'Claude Desktop / claude.ai', steps: ['Open Settings → Connectors → Add custom connector.', 'Name it Coffeenator and paste this URL.', 'Leave the OAuth fields empty — this server needs no sign-in.'], snippet: url },
+    { id: 'cursor', name: 'Cursor', steps: ['Open ~/.cursor/mcp.json (or .cursor/mcp.json in your project).', 'Add this server and save. It appears under Settings → MCP.'], snippet: JSON.stringify({ mcpServers: { coffeenator: { url } } }, null, 2) },
+    { id: 'vscode', name: 'VS Code', steps: ['Create .vscode/mcp.json in your workspace.', 'Paste this and choose Start above the server entry.'], snippet: JSON.stringify({ servers: { coffeenator: { type: 'http', url } } }, null, 2) },
+    { id: 'other', name: 'Other clients', steps: ['Transport: Streamable HTTP (JSON responses).', 'No headers or API key needed.'], snippet: url },
+  ];
+}
+
+const MCP_PROTOCOL_VERSION = '2025-06-18';
+
+async function mcpRpc(fetchImpl, id, method, params) {
+  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+  if (method !== 'initialize') headers['mcp-protocol-version'] = MCP_PROTOCOL_VERSION;
+  const response = await fetchImpl('/mcp', { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }) });
+  let payload = null;
+  try { payload = await response.json(); } catch {}
+  if (!response.ok || !payload?.result) {
+    throw Object.assign(new Error(boundedErrorMessage(payload?.error?.message, 'The MCP server did not answer.')), { fromServer: true });
+  }
+  return payload.result;
+}
+
+export async function requestMcpStatus({ fetchImpl = globalThis.fetch } = {}) {
+  try {
+    const init = await mcpRpc(fetchImpl, 1, 'initialize', { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'coffeenator-ui', version: '1' } });
+    const list = await mcpRpc(fetchImpl, 2, 'tools/list');
+    const tools = (Array.isArray(list.tools) ? list.tools : [])
+      .filter((tool) => typeof tool?.name === 'string')
+      .map((tool) => ({ name: tool.name.slice(0, 64), description: typeof tool.description === 'string' ? tool.description.slice(0, 240) : '' }));
+    const info = init.serverInfo || {};
+    return { status: 'online', server: [info.name, info.version].filter((part) => typeof part === 'string').join(' '), protocolVersion: typeof init.protocolVersion === 'string' ? init.protocolVersion : '', tools, checkedAt: new Date().toISOString() };
+  } catch (error) {
+    return { status: 'offline', message: error?.fromServer ? error.message : 'The MCP server could not be reached.', checkedAt: new Date().toISOString() };
+  }
+}

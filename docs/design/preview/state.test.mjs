@@ -405,3 +405,44 @@ test('requestKeyCheck posts provider and key and maps every outcome', async () =
   assert.equal((await requestKeyCheck('github', '', { fetchImpl: neverCall })).status, 'error');
   assert.equal((await requestKeyCheck('google', 'k', { fetchImpl: neverCall })).status, 'error');
 });
+
+test('MCP setup snippets embed the endpoint for every supported client', async () => {
+  const { mcpClients } = await import('./state.mjs');
+  const url = 'https://coffeenator.example/mcp';
+  const clients = mcpClients(url);
+  assert.deepEqual(clients.map(({ id }) => id), ['claude-code', 'claude-desktop', 'cursor', 'vscode', 'other']);
+  for (const client of clients) {
+    assert.ok(client.steps.length >= 1, client.id);
+    assert.ok(client.snippet.includes(url), `${client.id} snippet contains the URL`);
+  }
+  assert.equal(clients[0].snippet, `claude mcp add --transport http coffeenator ${url}`);
+  assert.deepEqual(JSON.parse(clients[2].snippet), { mcpServers: { coffeenator: { url } } });
+  assert.deepEqual(JSON.parse(clients[3].snippet), { servers: { coffeenator: { type: 'http', url } } });
+});
+
+test('requestMcpStatus runs initialize + tools/list over JSON-RPC and maps failures', async () => {
+  const { requestMcpStatus } = await import('./state.mjs');
+  const calls = [];
+  const online = await requestMcpStatus({ fetchImpl: async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body), headers: init.headers });
+    const { id, method } = JSON.parse(init.body);
+    const result = method === 'initialize'
+      ? { protocolVersion: '2025-06-18', serverInfo: { name: 'context-mcp-server', version: '0.1.0' } }
+      : { tools: [{ name: 'server_info', description: 'Diagnostics' }, { name: 'chat', description: 'Talk to the model', inputSchema: { type: 'object' } }] };
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id, result }), { status: 200 });
+  } });
+  assert.equal(online.status, 'online');
+  assert.equal(online.server, 'context-mcp-server 0.1.0');
+  assert.equal(online.protocolVersion, '2025-06-18');
+  assert.deepEqual(online.tools, [{ name: 'server_info', description: 'Diagnostics' }, { name: 'chat', description: 'Talk to the model' }]);
+  assert.ok(Number.isFinite(Date.parse(online.checkedAt)));
+  assert.deepEqual(calls.map(({ url, body }) => [url, body.method]), [['/mcp', 'initialize'], ['/mcp', 'tools/list']]);
+  assert.equal(calls[1].headers['mcp-protocol-version'], '2025-06-18');
+  const limited = await requestMcpStatus({ fetchImpl: async () => new Response(JSON.stringify({ ok: false, error: { message: 'Too many requests. Please wait a moment and try again.' } }), { status: 429 }) });
+  assert.equal(limited.status, 'offline');
+  assert.match(limited.message, /Too many requests/);
+  const rpcError = await requestMcpStatus({ fetchImpl: async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'Method not found' } }), { status: 200 }) });
+  assert.equal(rpcError.status, 'offline');
+  const offline = await requestMcpStatus({ fetchImpl: async () => { throw new Error('down'); } });
+  assert.equal(offline.status, 'offline');
+});

@@ -768,3 +768,11 @@ test('/mcp refuses GET, foreign origins and malformed JSON', async (t) => {
   assert.equal(parse.status, 400);
   assert.equal((await parse.json()).error.code, -32700);
 });
+
+test('/mcp accepts the preview page\'s own loopback origin so the MCP tab works locally', async (t) => {
+  const base = await serve(t, { env: {}, fetchImpl: neverFetch });
+  const own = await postMcp(base, { jsonrpc: '2.0', id: 1, method: 'ping' }, { origin: base });
+  assert.equal(own.status, 200);
+  assert.deepEqual((await own.json()).result, {});
+  assert.equal((await postMcp(base, { jsonrpc: '2.0', id: 2, method: 'ping' }, { origin: base.replace('127.0.0.1', 'localhost.evil.test') })).status, 403);
+});

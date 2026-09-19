@@ -205,6 +205,16 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .empty-registry .button { margin-left: auto; }
 .registry-section { margin-bottom: 34px; }
 .key-list { display: flex; flex-direction: column; gap: 8px; }
+.mcp-section { display: flex; flex-direction: column; }
+.mcp-endpoint { margin: 8px 0 26px; }
+.mcp-endpoint label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.mcp-copy-row { display: flex; gap: 10px; }
+.mcp-copy-row input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 10px 12px; background: var(--canvas); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; }
+.mcp-endpoint .field-hint { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.mcp-subheading { font-size: 14px; margin: 8px 0 14px; }
+.mcp-snippet { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 28px; }
+.mcp-snippet pre { flex: 1; min-width: 0; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-snippet .button { margin-top: 0; }
 .key-row { display: flex; align-items: center; gap: 14px; padding: 14px 17px; background: var(--surface); border: 1px solid var(--line); border-radius: 13px; margin: 12px 0; }
 .key-list .key-row { margin: 0; }
 .key-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
@@ -533,6 +543,8 @@ input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent)
   .sample-toggle { font-size: 10px; gap: 5px; }
   .empty-registry { flex-wrap: wrap; padding: 19px; gap: 12px; font-size: 12px; }
   .key-row { flex-wrap: wrap; }
+  .mcp-copy-row { flex-direction: column; }
+  .mcp-snippet { flex-direction: column; }
   .empty-registry .button { width: 100%; margin-left: 0; }
   .registry-table-wrap { border: none; border-radius: 0; background: none; }
   .registry-table, .registry-table tbody { display: block; width: 100%; }

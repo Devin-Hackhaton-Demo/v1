@@ -210,7 +210,10 @@ export function createPreviewServer({
       return;
     }
     if (pathname === '/mcp' || pathname === '/api/mcp') {
-      await handleMcpEndpoint(request, response, env, fetchImpl, mcpRateLimiter);
+      // Locally the page origin is plain http on loopback; pin it so the MCP
+      // Origin check (DNS-rebinding guard) accepts only this server's own page.
+      const mcpEnv = { ...env, APP_ORIGIN: env.APP_ORIGIN || `http://127.0.0.1:${request.socket.localPort}` };
+      await handleMcpEndpoint(request, response, mcpEnv, fetchImpl, mcpRateLimiter);
       return;
     }
     if (pathname.startsWith('/api/') && await handleApiRoute(pathname, request, response, { env, fetchImpl, loginRateLimiter, checkRateLimiter })) {
