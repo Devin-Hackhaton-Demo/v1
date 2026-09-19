@@ -31,3 +31,16 @@ export {
 export { listTasks } from './helpers/tasks.ts';
 export { prepareRun, getRun, type PrepareRunInput } from './helpers/runs.ts';
 export { approveRun, revokeApproval, type ApproveRunInput } from './helpers/approvals.ts';
+export {
+  activateDueRuns,
+  claimRun,
+  heartbeatRun,
+  completeRun,
+  failRun,
+  type ActivationSummary,
+  type ClaimedRun,
+  type CompleteRunArtifact,
+  type CompleteRunInput,
+  type FailRunInput,
+  type RunClosureReceipt,
+} from './helpers/statemachine.ts';

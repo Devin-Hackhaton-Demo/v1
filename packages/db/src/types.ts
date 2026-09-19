@@ -453,6 +453,72 @@ export type Database = {
         Args: { p_project_id: string };
         Returns: boolean;
       };
+      save_context: {
+        Args: {
+          p_project_id: string;
+          p_source: Json;
+          p_coverage: Database['public']['Enums']['coverage_kind'];
+          p_summary: string;
+          p_content_hash: string;
+          p_submitted_text?: string | null;
+          p_full_text_artifact_id?: string | null;
+          p_decisions?: Json;
+          p_tasks?: Json;
+        };
+        Returns: Json;
+      };
+      prepare_run: {
+        Args: {
+          p_project_id: string;
+          p_task_id: string;
+          p_context_revision: number;
+          p_context_entry_ids: string[];
+          p_payload_hash: string;
+          p_snapshot_hash?: string | null;
+          p_run_at?: string | null;
+        };
+        Returns: Json;
+      };
+      activate_due_runs: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
+      claim_run: {
+        Args: { p_preset?: Database['public']['Enums']['task_kind'] };
+        Returns: Json;
+      };
+      heartbeat_run: {
+        Args: {
+          p_run_id: string;
+          p_attempt_id: string;
+          p_lease_token: string;
+        };
+        Returns: Json;
+      };
+      complete_run: {
+        Args: {
+          p_run_id: string;
+          p_attempt_id: string;
+          p_lease_token: string;
+          p_result_key: string;
+          p_payload_hash: string;
+          p_artifact: Json;
+          p_checks: Json;
+        };
+        Returns: Json;
+      };
+      fail_run: {
+        Args: {
+          p_run_id: string;
+          p_attempt_id: string;
+          p_lease_token: string;
+          p_result_key: string;
+          p_error_code: string;
+          p_safe_message: string;
+          p_retryable?: boolean;
+        };
+        Returns: Json;
+      };
     };
     Enums: {
       membership_role: 'owner' | 'member';

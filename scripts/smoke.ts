@@ -164,6 +164,118 @@ const approval = await approveRun(owner, {
 });
 check('owner jóváhagyása: sikerült', approval.id.length > 0);
 
+console.log('\n7. save_context / prepare_run RPC gates');
+
+// Atomicity gate: one valid + one invalid decision (value = JSON object,
+// which violates the decisions table CHECK) in a single save_context call.
+// The old non-RPC path would have left an orphan entry and bumped the
+// revision; the RPC must roll back the whole batch.
+const { data: projBefore } = await owner
+  .from('projects')
+  .select('context_revision')
+  .eq('id', project.id)
+  .single();
+const { count: entriesBefore } = await owner
+  .from('context_entries')
+  .select('*', { count: 'exact', head: true })
+  .eq('project_id', project.id);
+
+const { error: atomicError } = await owner.rpc('save_context', {
+  p_project_id: project.id,
+  p_source: { kind: 'chatgpt', label: 'Atomicity gate chat' },
+  p_coverage: 'summary_only',
+  p_summary: 'Batch with one valid and one invalid decision.',
+  p_content_hash: 'a'.repeat(64),
+  p_decisions: [
+    { key: 'gate.valid', value: 'ok' },
+    { key: 'gate.invalid', value: { nested: true } }, // object → violates CHECK
+  ],
+});
+check('save_context: batch with invalid decision is rejected', atomicError !== null,
+  atomicError ? undefined : 'the RPC succeeded!');
+
+const { data: projAfter } = await owner
+  .from('projects')
+  .select('context_revision')
+  .eq('id', project.id)
+  .single();
+check('save_context: context_revision unchanged after rollback',
+  projAfter?.context_revision === projBefore?.context_revision,
+  `before: ${projBefore?.context_revision}, after: ${projAfter?.context_revision}`);
+
+const { count: entriesAfter } = await owner
+  .from('context_entries')
+  .select('*', { count: 'exact', head: true })
+  .eq('project_id', project.id);
+check('save_context: no orphan context entry after rollback',
+  entriesAfter === entriesBefore,
+  `before: ${entriesBefore}, after: ${entriesAfter}`);
+
+// Decision-conflict gate: two conflicting non-superseded decisions for the
+// same key across two entries; a task requiring that key must not get a run.
+const conflictSave1 = await saveContext(owner, {
+  projectId: project.id,
+  source: { kind: 'chatgpt', label: 'Conflict gate chat A' },
+  coverage: 'summary_only',
+  summary: 'Decision gate.color = red.',
+  decisions: [{ key: 'gate.color', value: 'red' }],
+  tasks: [{ title: 'Conflict gate task', requiredDecisionKeys: ['gate.color'] }],
+});
+const conflictSave2 = await saveContext(owner, {
+  projectId: project.id,
+  source: { kind: 'chatgpt', label: 'Conflict gate chat B' },
+  coverage: 'summary_only',
+  summary: 'Decision gate.color = blue (not superseding).',
+  decisions: [{ key: 'gate.color', value: 'blue' }],
+});
+const conflictTask = conflictSave1.tasks[0]!;
+
+let conflictError: Error | null = null;
+try {
+  await prepareRun(owner, {
+    projectId: project.id,
+    taskId: conflictTask.id,
+    contextRevision: conflictSave2.contextRevision,
+    contextEntryIds: [conflictSave1.entry.id, conflictSave2.entry.id],
+  });
+} catch (e) {
+  conflictError = e as Error;
+}
+check('prepare_run: DECISION_CONFLICT on conflicting non-superseded values',
+  conflictError !== null && conflictError.message.includes('DECISION_CONFLICT'),
+  conflictError ? conflictError.message : 'the RPC succeeded!');
+
+const { count: conflictRuns } = await owner
+  .from('runs')
+  .select('*', { count: 'exact', head: true })
+  .eq('task_id', conflictTask.id);
+check('prepare_run: zero runs created for the conflicted task', conflictRuns === 0,
+  `run count: ${conflictRuns}`);
+
+// Foreign-project gate: member@demo.test is not a member of this disposable
+// project → NOT_FOUND (no existence leak), and still zero runs for the task.
+let foreignPrepareError: Error | null = null;
+try {
+  await prepareRun(member, {
+    projectId: project.id,
+    taskId: conflictTask.id,
+    contextRevision: conflictSave1.contextRevision,
+    contextEntryIds: [conflictSave1.entry.id],
+  });
+} catch (e) {
+  foreignPrepareError = e as Error;
+}
+check('prepare_run: NOT_FOUND for a non-member caller',
+  foreignPrepareError !== null && foreignPrepareError.message.includes('NOT_FOUND'),
+  foreignPrepareError ? foreignPrepareError.message : 'the RPC succeeded!');
+
+const { count: foreignRuns } = await owner
+  .from('runs')
+  .select('*', { count: 'exact', head: true })
+  .eq('task_id', conflictTask.id);
+check('prepare_run: still zero runs after the foreign attempt', foreignRuns === 0,
+  `run count: ${foreignRuns}`);
+
 console.log('\nTakarítás (service role)…');
 await service.storage.from('artifacts').remove([artifact.storage_path]);
 const { error: cleanupError } = await service.from('projects').delete().eq('id', project.id);

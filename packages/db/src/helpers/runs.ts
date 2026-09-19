@@ -11,12 +11,20 @@ export interface PrepareRunInput {
   contextEntryIds: string[];
   /** Egyszeri UTC időzítés; üresen azonnali (jóváhagyás utáni) futás. */
   runAt?: string;
+  /** Optional ContextSnapshotV1 hash computed by the domain layer (§6). */
+  snapshotHash?: string;
 }
 
 /**
- * run_prepare: új futás 'awaiting_approval' állapotban. Az RLS csak ezt
- * az állapotot engedi kliensről; minden további állapotátmenet a
- * szerveroldali worker/API dolga (service role).
+ * run_prepare via the `prepare_run` RPC (SECURITY INVOKER — the existing RLS
+ * insert policy still applies, so only the 'awaiting_approval' state is
+ * possible from a client). The RPC additionally validates the pinned
+ * revision, the selected entries, the run_at window and the decision gate
+ * (DECISION_CONFLICT / CONTEXT_INCOMPLETE) in one transaction. All further
+ * state transitions stay server-side (service role).
+ *
+ * payload_hash is still computed here (sha256Hex + stableStringify); a later
+ * phase swaps in the RFC 8785 canonical JSON from the domain package.
  */
 export async function prepareRun(client: DbClient, input: PrepareRunInput): Promise<Tables<'runs'>> {
   const payloadHash = await sha256Hex(
@@ -29,20 +37,17 @@ export async function prepareRun(client: DbClient, input: PrepareRunInput): Prom
     }),
   );
 
-  const { data, error } = await client
-    .from('runs')
-    .insert({
-      project_id: input.projectId,
-      task_id: input.taskId,
-      context_revision: input.contextRevision,
-      context_entry_ids: input.contextEntryIds,
-      payload_hash: payloadHash,
-      run_at: input.runAt ?? null,
-    })
-    .select()
-    .single();
+  const { data, error } = await client.rpc('prepare_run', {
+    p_project_id: input.projectId,
+    p_task_id: input.taskId,
+    p_context_revision: input.contextRevision,
+    p_context_entry_ids: input.contextEntryIds,
+    p_payload_hash: payloadHash,
+    p_snapshot_hash: input.snapshotHash ?? null,
+    p_run_at: input.runAt ?? null,
+  });
   if (error) throw error;
-  return data;
+  return data as unknown as Tables<'runs'>;
 }
 
 export async function getRun(client: DbClient, projectId: string, runId: string): Promise<Tables<'runs'> | null> {

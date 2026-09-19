@@ -40,13 +40,15 @@ export interface SaveContextResult {
 }
 
 /**
- * Kontextusmentés: bejegyzés + döntések + nyitott feladatok. A projekt
- * revízióját a DB-trigger lépteti atomikusan a bejegyzés INSERT-jekor.
+ * Context save: entry + decisions + open tasks via the `save_context` RPC
+ * (SECURITY INVOKER — RLS keeps enforcing every row rule inside). The whole
+ * batch runs in ONE database transaction: if any decision or task insert
+ * fails, the entry insert and the project revision bump roll back with it,
+ * so no orphan entry can remain. The revision trigger still assigns
+ * entry.revision atomically.
  *
- * Korlát (tudatos döntés, PROJECT_CONTEXT.md "v1 eltérések"): a három
- * lépés nem egyetlen DB-tranzakció — félbeszakadás esetén a bejegyzés
- * döntések/feladatok nélkül maradhat meg. A revíziószámozás ettől még
- * sérthetetlen; szigorúbb atomicitáshoz később save_context RPC jöhet.
+ * content_hash is still computed here (sha256Hex + stableStringify); a later
+ * phase swaps in the RFC 8785 canonical JSON from the domain package.
  */
 export async function saveContext(client: DbClient, input: SaveContextInput): Promise<SaveContextResult> {
   const contentHash = await sha256Hex(
@@ -58,62 +60,45 @@ export async function saveContext(client: DbClient, input: SaveContextInput): Pr
     }),
   );
 
-  const { data: entry, error: entryError } = await client
-    .from('context_entries')
-    .insert({
-      project_id: input.projectId,
-      source_kind: input.source.kind,
-      source_label: input.source.label,
+  const { data, error } = await client.rpc('save_context', {
+    p_project_id: input.projectId,
+    p_source: {
+      kind: input.source.kind,
+      label: input.source.label,
       conversation_ref: input.source.conversationRef ?? null,
       occurred_at: input.source.occurredAt ?? null,
-      coverage: input.coverage,
-      submitted_text: input.submittedText ?? null,
-      summary: input.summary,
-      full_text_artifact_id: input.fullTextArtifactId ?? null,
-      content_hash: contentHash,
-    })
-    .select()
-    .single();
-  if (entryError) throw entryError;
+    },
+    p_coverage: input.coverage,
+    p_summary: input.summary,
+    p_content_hash: contentHash,
+    p_submitted_text: input.submittedText ?? null,
+    p_full_text_artifact_id: input.fullTextArtifactId ?? null,
+    p_decisions: (input.decisions ?? []).map((d) => ({
+      key: d.key,
+      value: d.value,
+      source_excerpt: d.sourceExcerpt ?? null,
+      supersedes_decision_ids: d.supersedesDecisionIds ?? [],
+    })),
+    p_tasks: (input.tasks ?? []).map((t) => ({
+      title: t.title,
+      required_decision_keys: t.requiredDecisionKeys ?? [],
+      input_artifact_ids: t.inputArtifactIds ?? [],
+    })),
+  });
+  if (error) throw error;
 
-  let decisions: Tables<'decisions'>[] = [];
-  if (input.decisions?.length) {
-    const { data, error } = await client
-      .from('decisions')
-      .insert(
-        input.decisions.map((d) => ({
-          project_id: input.projectId,
-          context_entry_id: entry.id,
-          key: d.key,
-          value: d.value,
-          source_excerpt: d.sourceExcerpt ?? null,
-          supersedes_decision_ids: d.supersedesDecisionIds ?? [],
-        })),
-      )
-      .select();
-    if (error) throw error;
-    decisions = data;
-  }
-
-  let tasks: Tables<'tasks'>[] = [];
-  if (input.tasks?.length) {
-    const { data, error } = await client
-      .from('tasks')
-      .insert(
-        input.tasks.map((t) => ({
-          project_id: input.projectId,
-          context_entry_id: entry.id,
-          title: t.title,
-          required_decision_keys: t.requiredDecisionKeys ?? [],
-          input_artifact_ids: t.inputArtifactIds ?? [],
-        })),
-      )
-      .select();
-    if (error) throw error;
-    tasks = data;
-  }
-
-  return { entry, decisions, tasks, contextRevision: entry.revision };
+  const result = data as unknown as {
+    entry: Tables<'context_entries'>;
+    decisions: Tables<'decisions'>[];
+    tasks: Tables<'tasks'>[];
+    context_revision: number;
+  };
+  return {
+    entry: result.entry,
+    decisions: result.decisions,
+    tasks: result.tasks,
+    contextRevision: result.context_revision,
+  };
 }
 
 export interface ContextView {
