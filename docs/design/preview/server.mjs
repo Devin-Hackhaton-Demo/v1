@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { handleMcpHttp } from '../../../api/_lib/mcp.mjs';
 import { createRateLimiter, errorEnvelope, handleChatRequest, MAX_BODY_BYTES, MAX_CHAT_BODY_BYTES } from '../../../api/_lib/anthropic.mjs';
 import {
   bearerToken,
@@ -96,6 +97,30 @@ async function handleChatEndpoint(request, response, env, fetchImpl, rateLimiter
   sendJson(response, status, payload);
 }
 
+// Stateless MCP endpoint, mirroring api/mcp.mjs. A body that is not valid JSON
+// reaches the handler as undefined so it can answer with a JSON-RPC parse error.
+async function handleMcpEndpoint(request, response, env, fetchImpl, rateLimiter) {
+  let body;
+  if (request.method === 'POST') {
+    if (!guardRateLimit(request, response, rateLimiter)) return;
+    const chunks = [];
+    let received = 0;
+    for await (const chunk of request) {
+      received += chunk.length;
+      if (received > MAX_BODY_BYTES) { sendJson(response, 400, errorEnvelope('VALIDATION_ERROR', BODY_LIMIT_MESSAGE, false)); return; }
+      chunks.push(chunk);
+    }
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { body = undefined; }
+  }
+  const result = await handleMcpHttp({ method: request.method, headers: request.headers, body }, { env, fetchImpl });
+  if (result.body === null || result.body === undefined) {
+    response.writeHead(result.status, result.headers || {});
+    response.end();
+    return;
+  }
+  sendJson(response, result.status, result.body, result.headers || {});
+}
+
 // The same six user-connection routes the Vercel functions expose
 // (api/auth/*.mjs, api/connections/*.mjs), wired against the shared handlers.
 async function handleApiRoute(pathname, request, response, { env, fetchImpl, loginRateLimiter, checkRateLimiter }) {
@@ -170,6 +195,7 @@ export function createPreviewServer({
   rateLimiter = createRateLimiter(),
   loginRateLimiter = createRateLimiter(LOGIN_RATE_LIMIT),
   checkRateLimiter = createRateLimiter(CHECK_RATE_LIMIT),
+  mcpRateLimiter = createRateLimiter(),
 } = {}) {
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
@@ -181,6 +207,10 @@ export function createPreviewServer({
     try { pathname = new URL(request.url, 'http://127.0.0.1').pathname; } catch { response.writeHead(400).end(); return; }
     if (pathname === '/api/chat') {
       await handleChatEndpoint(request, response, env, fetchImpl, rateLimiter);
+      return;
+    }
+    if (pathname === '/mcp' || pathname === '/api/mcp') {
+      await handleMcpEndpoint(request, response, env, fetchImpl, mcpRateLimiter);
       return;
     }
     if (pathname.startsWith('/api/') && await handleApiRoute(pathname, request, response, { env, fetchImpl, loginRateLimiter, checkRateLimiter })) {

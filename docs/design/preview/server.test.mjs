@@ -738,3 +738,33 @@ test('POST /api/keys/check rate limits the 11th rapid check from the same IP', a
   assert.equal(limited.status, 429);
   assert.equal((await limited.json()).error.code, 'LIMIT_EXCEEDED');
 });
+
+// --- Public stateless MCP endpoint (wiring; protocol details in api/_lib/mcp.test.mjs) ---
+
+function postMcp(base, message, headers = {}) {
+  return fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body: typeof message === 'string' ? message : JSON.stringify(message) });
+}
+
+test('POST /mcp initializes, lists both tools and answers a chat tool call without leaking the key', async (t) => {
+  const base = await serve(t, { env: { ANTHROPIC_API_KEY: 'integration-test-key' }, fetchImpl: async () => anthropicResponse() });
+  const init = await postMcp(base, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
+  assert.equal(init.status, 200);
+  assert.equal((await init.json()).result.protocolVersion, '2025-06-18');
+  assert.equal((await postMcp(base, { jsonrpc: '2.0', method: 'notifications/initialized' })).status, 202);
+  const list = await (await postMcp(base, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json();
+  assert.deepEqual(list.result.tools.map(({ name }) => name).sort(), ['chat', 'server_info']);
+  const call = await postMcp(base, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'chat', arguments: { message: 'Hi' } } });
+  const raw = await call.text();
+  assert.ok(!raw.includes('integration-test-key'));
+  assert.equal(JSON.parse(raw).result.content[0].text, 'Enjoy your coffee.');
+});
+
+test('/mcp refuses GET, foreign origins and malformed JSON', async (t) => {
+  const base = await serve(t, { env: {}, fetchImpl: neverFetch });
+  const get = await fetch(`${base}/mcp`);
+  assert.equal(get.status, 405);
+  assert.equal((await postMcp(base, { jsonrpc: '2.0', id: 1, method: 'ping' }, { origin: 'https://evil.example' })).status, 403);
+  const parse = await postMcp(base, '{not json');
+  assert.equal(parse.status, 400);
+  assert.equal((await parse.json()).error.code, -32700);
+});

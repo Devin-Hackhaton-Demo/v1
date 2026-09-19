@@ -12,11 +12,14 @@ and agent runs execute only after explicit owner approval. Surfaces: `packages/d
 `apps/worker` (activation worker), `apps/api` (Fastify + MCP server, loopback-only),
 a static demo UI under `docs/design/preview/`, and a server-side Anthropic-backed
 chat proxy (`POST /api/chat`: serverless `api/chat.mjs` and a local proxy in the
-preview server). The MCP server is local-only (`npm run dev` →
-`http://127.0.0.1:3000/mcp`); it is not deployed.
+preview server). A public, stateless MCP endpoint is deployed at `/mcp`
+(`api/mcp.mjs` + `api/_lib/mcp.mjs`, dependency-free, Streamable HTTP with JSON
+responses; tools: read-only `server_info` and `chat`, which reuses the chat proxy;
+tests in `api/_lib/mcp.test.mjs`). The Fastify MCP scaffold in `apps/api` stays
+loopback-only for local development (`npm run dev`).
 
 **No authentication in the deployed preview (user decision, 2026-09-19).** The app
-opens directly; `/api/chat` and `/api/keys/check` are public and protected only by
+opens directly; `/api/chat`, `/api/keys/check` and `/mcp` are public and protected only by
 per-IP rate limits (10/60 s per warm instance). `api/_lib/auth.mjs` and the `/auth`
 page exist but are not wired into the app — do not re-add a login gate.
 
