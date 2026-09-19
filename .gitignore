@@ -6,3 +6,5 @@ dist/
 *.tsbuildinfo
 coverage/
 .vercel/
+.vercel
+.env*

@@ -188,13 +188,13 @@ test('all nine companions have their own original artwork', () => {
   assert.equal(new Set(companions.map(({ id }) => companionArt(id))).size, 9);
 });
 
-test('provider marks use local assets with correct Composio variants', () => {
-  for (const name of ['gmail', 'calendar', 'drive', 'github', 'supabase', 'claude', 'chatgpt', 'composio']) {
+test('provider marks use local assets and never a Composio logo', () => {
+  for (const name of ['gmail', 'calendar', 'drive', 'github', 'supabase', 'claude', 'chatgpt']) {
     assert.match(serviceMark(name), /src="\/icons\//);
     assert.doesNotMatch(serviceMark(name), /https?:/);
   }
-  assert.match(serviceMark('composio', true), /composio-white.svg/);
-  assert.match(serviceMark('composio', false), /composio-black.svg/);
+  assert.doesNotMatch(serviceMark('composio', true), /composio/);
+  assert.doesNotMatch(serviceMark('composio', false), /composio/);
 });
 
 test('sample connection records are always labelled and carry explicit timestamps', () => {

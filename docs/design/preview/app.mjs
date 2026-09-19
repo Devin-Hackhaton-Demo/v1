@@ -199,6 +199,19 @@ function autosizeComposer() {
   input.style.height = `${input.scrollHeight}px`;
 }
 
+const LEGAL_LINKS = [
+  ['/legal', 'Legal notice'],
+  ['/terms', 'Terms'],
+  ['/privacy', 'Privacy'],
+  ['/ai-data', 'AI & data'],
+  ['/cookies', 'Cookies'],
+];
+
+// Site-wide legal footer. Static pages, so plain links rather than hash routes.
+function legalFooter() {
+  return `<footer class="site-legal" aria-label="Legal information"><nav aria-label="Legal pages">${LEGAL_LINKS.map(([href, label]) => `<a href="${href}">${esc(label)}</a>`).join('')}</nav><p>Coffeenator Labs Kft. (fictional demo) \u00b7 Company details, addresses and numbers on the legal pages are invented test data.</p></footer>`;
+}
+
 function render() {
   applyAppearance();
   preserveFocus(app, () => {
@@ -207,7 +220,8 @@ function render() {
       <nav class="primary-nav" aria-label="Main navigation">${NAV.map((item) => `<a href="#${item.id}" class="nav-item${page === item.id ? ' active' : ''}" ${page === item.id ? 'aria-current="page"' : ''} aria-label="${item.label}">${icon(item.icon)}<span>${item.label}</span>${item.id === 'memory' && sources.length ? `<span class="nav-count">${sources.length}</span>` : ''}</a>`).join('')}</nav>
       <div class="sidebar-bottom"><button class="model-status" data-action="help" data-value="ai"><span class="status-dot"></span><span>Chat via server proxy</span>${icon('chevron')}</button><button class="account-button" data-action="settings" aria-label="Open profile and settings">${avatar()}<span><strong>${esc(profile.name || 'Your profile')}</strong><small>Settings</small></span>${icon('sliders')}</button></div>
       </aside><div class="main-shell"><header class="topbar"><a href="#chat" class="brand mobile-brand"><span class="brand-symbol">${brandMark(profile.brand)}</span><span class="wordmark">${esc(brand().name)}</span></a><span class="page-label">${NAV.find(({ id }) => id === page).label}</span><div class="top-actions"><button class="preview-label" data-action="help" data-value="preview">About</button><button class="icon-button" data-action="appearance" aria-label="Appearance">${icon(document.documentElement.dataset.resolved === 'dark' ? 'moon' : 'sun')}</button><button class="icon-button mobile-profile" data-action="settings" aria-label="Profile and settings">${avatar()}</button></div></header>
-      <main class="content ${page === 'chat' ? 'chat-content' : ''}" id="main" tabindex="-1" data-page="${page}">${({ chat: chatPage, connectors: connectorsPage, memory: memoryPage })[page]()}</main></div>
+      <main class="content ${page === 'chat' ? 'chat-content' : ''}" id="main" tabindex="-1" data-page="${page}">${({ chat: chatPage, connectors: connectorsPage, memory: memoryPage })[page]()}</main>
+      ${legalFooter()}</div>
       <nav class="mobile-nav" aria-label="Mobile navigation">${NAV.map((item) => `<a href="#${item.id}" class="${page === item.id ? 'active' : ''}" ${page === item.id ? 'aria-current="page"' : ''}>${icon(item.icon)}<span>${item.label}</span></a>`).join('')}</nav></div>`;
   });
   autosizeComposer();
@@ -239,7 +253,7 @@ function connectionPresentation(record) {
 }
 
 function connectorsPage() {
-  return `<div class="page"><div class="page-heading"><h1>Connectors</h1><div class="provider-label">${mark('composio')}<span>Composio</span>${statePill('Setup pending')}${help('composio')}</div></div><div class="section-tabs" role="group" aria-label="Connector view"><button class="section-tab${selected(connectorTab === 'connections')}" data-action="connector-tab" data-value="connections" aria-pressed="${connectorTab === 'connections'}">${icon('plug')}Connections</button><button class="section-tab${selected(connectorTab === 'stack')}" data-action="connector-tab" data-value="stack" aria-pressed="${connectorTab === 'stack'}">${icon('cpu')}My AI stack</button></div>${connectorTab === 'stack' ? stackPage() : registryPage()}</div>`;
+  return `<div class="page"><div class="page-heading"><h1>Connectors</h1><div class="provider-label"><span>Composio</span>${statePill('Setup pending')}${help('composio')}</div></div><div class="section-tabs" role="group" aria-label="Connector view"><button class="section-tab${selected(connectorTab === 'connections')}" data-action="connector-tab" data-value="connections" aria-pressed="${connectorTab === 'connections'}">${icon('plug')}Connections</button><button class="section-tab${selected(connectorTab === 'stack')}" data-action="connector-tab" data-value="stack" aria-pressed="${connectorTab === 'stack'}">${icon('cpu')}My AI stack</button></div>${connectorTab === 'stack' ? stackPage() : registryPage()}</div>`;
 }
 
 function registryPage() {

@@ -167,9 +167,9 @@ function sdk(context, fetchImpl) {
     global: { fetch: safeFetch },
   });
 }
-function makeContext(request, response, { env = process.env, fetchImpl = globalThis.fetch } = {}) {
+function makeContext(request, response, { env = process.env, fetchImpl = globalThis.fetch, authorizeUser } = {}) {
   const cfg = config(env);
-  const context = { cfg, cookies: cookieJar(request, response, cfg), user: null, rawUser: null, access: null, refresh: null };
+  const context = { cfg, cookies: cookieJar(request, response, cfg), user: null, rawUser: null, access: null, refresh: null, authorizeUser };
   context.client = sdk(context, fetchImpl);
   requestContexts.set(request, context);
   return context;
@@ -194,7 +194,9 @@ function hasAiConsent(user) {
 async function verifyUser(context, access) {
   const { data, error } = await context.client.auth.getUser(access);
   if (error?.code === 'auth_upstream_unavailable' || error?.status >= 500) throw unavailable();
-  return error ? null : data.user;
+  const user = error ? null : data.user;
+  if (user && context.authorizeUser && !context.authorizeUser(publicUser(user))) return null;
+  return user;
 }
 function setSessionCookies(context, session, user) {
   if (!session || typeof session.access_token !== 'string' || typeof session.refresh_token !== 'string' || !session.access_token || !session.refresh_token || !publicUser(user)) throw unavailable();
@@ -388,10 +390,15 @@ export async function getAuthContext(request, response, options = {}) {
   await authenticate(context);
   return { user: context.user, csrfToken: csrf(context) };
 }
+export function getVerifiedSession(request) {
+  const context = requestContexts.get(request);
+  return context?.user && context.access ? { user: context.user, accessToken: context.access } : null;
+}
 export async function requireAuth(request, response, options = {}) {
   securityHeaders(response);
   try {
     const context = makeContext(request, response, options);
+    if (options.rejectAnonymousFirst && !context.cookies.get('access') && !context.cookies.get('refresh')) throw new AuthFailure(401, 'AUTH_REQUIRED', 'Sign in to continue.');
     validateMutation(request, context);
     await authenticate(context);
     if (!context.user) throw new AuthFailure(401, 'AUTH_REQUIRED', 'Sign in to continue.');
@@ -433,6 +440,7 @@ export async function handleAuthRequest(request, response, options = {}) {
     const body = await readBody(request);
     if (action === 'login' || action === 'signup') {
       const credentials = { email: email(body.email), password: password(body.password) };
+      if (action === 'login' && options.validateLogin && !options.validateLogin(credentials)) throw new AuthFailure(401, 'AUTH_FAILED', 'Invalid email or password.');
       if (action === 'signup') {
         requireTerms(body);
         credentials.options = { emailRedirectTo: `${context.cfg.origin}/auth/callback`, data: { terms_acceptance: { accepted: true, version: VERSION } } };

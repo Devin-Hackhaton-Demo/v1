@@ -655,3 +655,13 @@ input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent)
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .brewing .composer-aura { opacity: .2; }
 }
+
+/* Site-wide legal footer (all app pages). */
+.site-legal { padding: 14px 24px 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.site-legal nav { display: flex; flex-wrap: wrap; gap: 14px; }
+.site-legal a { color: var(--muted); text-decoration: none; }
+.site-legal a:hover { color: var(--ink); text-decoration: underline; }
+.site-legal p { margin: 0; flex: 1 1 260px; min-width: 0; }
+@media (max-width: 720px) {
+  .site-legal { padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); }
+}

@@ -34,7 +34,7 @@ test('the preview serves a complete English application without external assets'
   assert.match(html, /lang="en"/);
   assert.match(html, /Coffeenator/);
   assert.doesNotMatch(html, /https?:\/\//);
-  for (const asset of ['/app.mjs', '/state.mjs', '/art.mjs', '/styles.css', '/tokens.css', '/favicon.svg', '/icons/gmail.png', '/icons/calendar.png', '/icons/drive.png', '/icons/github.svg', '/icons/supabase.svg', '/icons/claude.svg', '/icons/chatgpt.svg', '/icons/composio-black.svg', '/icons/composio-white.svg']) {
+  for (const asset of ['/app.mjs', '/state.mjs', '/art.mjs', '/styles.css', '/tokens.css', '/favicon.svg', '/icons/gmail.png', '/icons/calendar.png', '/icons/drive.png', '/icons/github.svg', '/icons/supabase.svg', '/icons/claude.svg', '/icons/chatgpt.svg']) {
     const result = await fetch(base + asset);
     assert.equal(result.status, 200, asset);
     assert.ok(Number(result.headers.get('content-length')) > 0, asset);

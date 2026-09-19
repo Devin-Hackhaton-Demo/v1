@@ -61,7 +61,7 @@ export function brandMark(brand = 'coffeenator') {
 }
 
 export function serviceMark(name, dark = false) {
-  const assets = { gmail: 'gmail.png', calendar: 'calendar.png', drive: 'drive.png', github: 'github.svg', supabase: 'supabase.svg', claude: 'claude.svg', chatgpt: 'chatgpt.svg', composio: `composio-${dark ? 'white' : 'black'}.svg` };
+  const assets = { gmail: 'gmail.png', calendar: 'calendar.png', drive: 'drive.png', github: 'github.svg', supabase: 'supabase.svg', claude: 'claude.svg', chatgpt: 'chatgpt.svg' };
   if (assets[name]) return `<img class="service-mark${name === 'github' && dark ? ' monochrome-light' : ''}" src="/icons/${assets[name]}" width="24" height="24" alt="" aria-hidden="true">`;
   if (name === 'notion') return '<svg class="service-mark" viewBox="0 0 42 42" aria-hidden="true" focusable="false"><rect x="5" y="5" width="30" height="30" rx="5" fill="currentColor"/><text x="20" y="29" fill="var(--surface)" text-anchor="middle" font-family="Georgia,serif" font-size="27" font-weight="700">N</text></svg>';
   return icon('cpu');
