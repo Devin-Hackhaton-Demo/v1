@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#fbfaf8">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="A little space for your big ideas. Sign in to your Coffeenator personal AI home.">
+  <title>Your account · Coffeenator</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/auth/styles.css">
+  <script type="module" src="/auth/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to account</a>
+  <div class="auth-shell">
+    <aside class="brand-panel" aria-label="About Coffeenator">
+      <a class="brand" href="/" aria-label="Coffeenator home">
+        <span class="brand-symbol"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><path d="M10 21h23v10a9 9 0 0 1-9 9h-5a9 9 0 0 1-9-9Z" fill="currentColor"/><path d="M33 24h3a5 5 0 0 1 0 10h-4M18 7c-4 5 4 5 0 9m9-9c-4 5 4 5 0 9" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/><path d="M16 29h2m8 0h2m-9 5q3 3 6 0" stroke="#825038" stroke-width="2" fill="none" stroke-linecap="round"/></svg></span>
+        <span>Coffeenator<span class="brand-dot">.</span></span>
+      </a>
+      <div class="brand-story">
+        <span class="eyebrow"><svg class="tiny-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6Z"/></svg> YOUR PERSONAL AI HOME</span>
+        <h2>A little space.<br>For your <em>big ideas.</em></h2>
+        <p>Your thoughts, a fresh perspective, and a companion for the everyday. Make yourself at home.</p>
+        <div class="companion-scene" aria-hidden="true">
+          <div class="scene-orbit orbit-one"></div>
+          <div class="scene-orbit orbit-two"></div>
+          <div class="scene-note note-idea"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 18h6m-5 3h4M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 2H9s0-1-1-2Z"/></svg>A fresh perspective</div>
+          <div class="scene-note note-home"><span class="note-dot"></span>A place to think</div>
+          <svg class="companion-art" viewBox="0 0 240 210" focusable="false">
+            <ellipse cx="121" cy="186" rx="70" ry="9" fill="#513a27" opacity=".1"/>
+            <path class="bean-steam" d="M104 56c-19-17 16-21 0-41" stroke="#bba184" stroke-width="5" fill="none" stroke-linecap="round"/>
+            <path class="bean-steam second" d="M136 55c-18-17 16-21 0-41" stroke="#bba184" stroke-width="5" fill="none" stroke-linecap="round"/>
+            <path d="M176 86h14c29 0 28 51-4 53h-13" stroke="#b7895f" stroke-width="15" fill="none"/>
+            <path d="M64 79h115l-7 65c-2 26-22 39-51 39s-50-13-52-39Z" fill="#c59b71"/>
+            <path d="M72 85h97l-6 56c-2 20-17 33-42 33s-42-13-44-33Z" fill="#e2bf91"/>
+            <ellipse cx="121" cy="79" rx="57" ry="12" fill="#f3d9b4"/>
+            <ellipse cx="121" cy="79" rx="45" ry="7" fill="#6c4431"/>
+            <path d="M102 78c7-8 17 7 25 0s17-3 17-3" stroke="#d6b187" stroke-width="2" fill="none" stroke-linecap="round"/>
+            <path d="M65 118c-17-11-23-5-19 7 3 9 14 10 22 10" fill="#c59b71"/>
+            <ellipse cx="101" cy="116" rx="4.5" ry="6.5" fill="#513528"/><ellipse cx="144" cy="116" rx="4.5" ry="6.5" fill="#513528"/>
+            <circle cx="100" cy="114" r="1.5" fill="#fff8e8"/><circle cx="143" cy="114" r="1.5" fill="#fff8e8"/>
+            <path d="M113 132q9 10 18 0" stroke="#684432" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <ellipse cx="86" cy="128" rx="8" ry="4" fill="#ce8b75" opacity=".5"/><ellipse cx="159" cy="128" rx="8" ry="4" fill="#ce8b75" opacity=".5"/>
+            <path d="m94 179-8 7m62-7 8 7" stroke="#8f6645" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="workspace-pill"><span>Chat</span><span class="pill-divider"></span><span>Connectors</span><span class="pill-divider"></span><span>Memory</span></div>
+      </div>
+      <p class="brand-caption">Your context. Freshly brewed.</p>
+    </aside>
+    <section class="account-panel">
+      <header class="account-nav">
+        <a class="home-link" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M19 12H5m6-6-6 6 6 6"/></svg><span>Back to home</span></a>
+        <a class="nav-switch" id="nav-switch" href="/signup">Create an account</a>
+      </header>
+      <main class="account-main" id="main">
+        <div class="auth-card" id="auth-card">
+          <div class="section-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 9h12v5a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5Zm12 1h1a3 3 0 0 1 0 6h-1M8 3c-2 2 2 2 0 4m5-4c-2 2 2 2 0 4M3 22h17" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="account-heading">
+            <p class="eyebrow" id="form-eyebrow">MAKE YOURSELF AT HOME</p>
+            <h1 id="form-title">Your space is waiting.</h1>
+            <p id="form-description">Getting your account ready.</p>
+          </div>
+          <div class="feedback feedback-error" id="error-message" role="alert" tabindex="-1" hidden></div>
+          <div class="feedback feedback-info" id="notice-message" role="status" aria-live="polite" hidden></div>
+          <button class="retry-button" type="button" id="retry-session" hidden>Try connecting again</button>
+          <form id="auth-form" action="/login" method="post" hidden>
+            <div id="google-section">
+              <button class="google-button" id="google-button" type="button" disabled>
+                <svg class="google-mark" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true" focusable="false">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                  <path fill="none" d="M0 0h48v48H0z"/>
+                </svg>
+                <span id="google-label">Continue with Google</span>
+              </button>
+              <div class="divider"><span>or continue with email</span></div>
+            </div>
+            <div class="field" id="email-field">
+              <label for="email">Email address</label>
+              <input id="email" name="email" type="email" autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false" placeholder="you@example.com" required>
+            </div>
+            <div class="field" id="password-field">
+              <div class="label-row"><label id="password-label" for="password">Password</label><a href="/forgot-password" id="forgot-link">Forgot password?</a></div>
+              <div class="password-control">
+                <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+                <button class="password-toggle" id="password-toggle" type="button" aria-label="Show password" aria-pressed="false" aria-controls="password" title="Show password">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path id="eye-slash" d="m3 3 18 18" hidden/></svg>
+                </button>
+              </div>
+              <p class="field-hint" id="password-hint" hidden>Your account service will check the password requirements.</p>
+            </div>
+            <div class="terms-field" id="terms-field">
+              <label class="terms-label" for="terms-accepted"><input id="terms-accepted" name="termsAccepted" type="checkbox" value="true"><span>I agree to the <a href="/terms" target="_blank" rel="noopener">Terms<span class="sr-only"> (opens in a new tab)</span></a> and acknowledge the <a href="/privacy" target="_blank" rel="noopener">Privacy notice<span class="sr-only"> (opens in a new tab)</span></a>.</span></label>
+              <p class="field-hint" id="terms-hint">Required for Google sign-in, including a new account.</p>
+            </div>
+            <button class="primary-button" id="submit-button" type="submit" disabled><span id="submit-label">Sign in</span><svg id="submit-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg><span class="spinner" id="submit-spinner" aria-hidden="true" hidden></span></button>
+          </form>
+          <section class="success-panel" id="success-panel" aria-labelledby="success-title" hidden>
+            <span class="success-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></svg></span>
+            <h2 id="success-title" tabindex="-1">Check your inbox</h2>
+            <p id="success-description"></p>
+            <p class="success-hint" id="success-hint">Check your spam folder, too. Only use the latest email link.</p>
+            <a class="primary-button" id="success-link" href="/login">Back to sign in</a>
+            <button class="text-button" id="try-another-email" type="button" hidden>Use a different email</button>
+          </section>
+          <p class="account-switch" id="account-switch"><span id="switch-prompt">New around here?</span> <a id="switch-link" href="/signup">Create an account</a></p>
+          <p class="privacy-note" id="privacy-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span>Google sign-in does not connect Gmail.<br>Connector permissions are a separate choice.</span></p>
+          <p class="session-status" id="session-status" role="status" aria-live="polite">Connecting to your account service…</p>
+        </div>
+        <noscript><div class="noscript-message"><h1>Let’s get you signed in.</h1><p>Please enable JavaScript to use account sign-in. No account request has been sent.</p><a href="/">Back to home</a></div></noscript>
+      </main>
+      <footer class="account-footer"><p>Coffeenator <span aria-hidden="true">·</span> A calmer place to begin.</p><nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/ai-data">AI &amp; data</a><a href="/cookies">Cookies</a><a href="/legal">Legal notice</a></nav><span class="demo-label">Demo · fictional company details</span></footer>
+    </section>
+  </div>
+</body>
+</html>

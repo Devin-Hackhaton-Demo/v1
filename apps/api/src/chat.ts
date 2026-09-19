@@ -4,12 +4,14 @@ import {
   SCHEMA_VERSION,
   chatRequestSchema,
   chatResponseSchema,
+  type ChatMessage,
   type ServiceError,
 } from '@demo/contracts';
 import type { Config } from './config.js';
 
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
+const CHAT_BODY_LIMIT_BYTES = 4_194_304;
 const UPSTREAM_TIMEOUT_MS = 60_000;
 const UPSTREAM_MAX_TOKENS = 1024;
 const RATE_LIMIT_MAX_REQUESTS = 10;
@@ -37,6 +39,13 @@ function createRateLimiter({ limit, windowMs }: RateLimit) {
   };
 }
 
+function toUpstreamContent(content: ChatMessage['content']) {
+  if (typeof content === 'string') return content;
+  return content.map((block) => (block.type === 'text'
+    ? { type: 'text', text: block.text }
+    : { type: 'image', source: { type: 'base64', media_type: block.media_type, data: block.data } }));
+}
+
 const upstreamMessageSchema = z.looseObject({
   model: z.string().min(1),
   content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })),
@@ -55,7 +64,7 @@ export function registerChatRoute(
   const checkRateLimit = createRateLimiter(
     options.rateLimit ?? { limit: RATE_LIMIT_MAX_REQUESTS, windowMs: RATE_LIMIT_WINDOW_MS },
   );
-  app.post('/api/chat', async (request, reply) => {
+  app.post('/api/chat', { bodyLimit: CHAT_BODY_LIMIT_BYTES }, async (request, reply) => {
     const sendError = (statusCode: number, error: ServiceError) => reply.code(statusCode).send(
       chatResponseSchema.parse({
         schema_version: SCHEMA_VERSION,
@@ -100,7 +109,10 @@ export function registerChatRoute(
         body: JSON.stringify({
           model: anthropicModel,
           max_tokens: UPSTREAM_MAX_TOKENS,
-          messages: parsed.data.messages,
+          messages: parsed.data.messages.map((message) => ({
+            role: message.role,
+            content: toUpstreamContent(message.content),
+          })),
           system: parsed.data.system && parsed.data.system.length > 0 ? parsed.data.system : DEFAULT_SYSTEM_PROMPT,
         }),
         signal: controller.signal,

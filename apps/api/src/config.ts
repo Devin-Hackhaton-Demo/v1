@@ -7,6 +7,9 @@ const configSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
   ANTHROPIC_MODEL: z.string().min(1).default('claude-sonnet-5'),
+  APP_ORIGIN: z.url().optional(),
+  SUPABASE_URL: z.url().optional(),
+  SUPABASE_ANON_KEY: z.string().min(1).optional(),
 });
 
 export class ConfigurationError extends Error {}
@@ -19,6 +22,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     LOG_LEVEL: environment.LOG_LEVEL,
     ANTHROPIC_API_KEY: environment.ANTHROPIC_API_KEY,
     ANTHROPIC_MODEL: environment.ANTHROPIC_MODEL,
+    APP_ORIGIN: environment.APP_ORIGIN,
+    SUPABASE_URL: environment.SUPABASE_URL,
+    SUPABASE_ANON_KEY: environment.SUPABASE_ANON_KEY,
   });
   if (!result.success) {
     const fields = [...new Set(result.error.issues.map((issue) => issue.path[0]))];
@@ -29,6 +35,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     port: result.data.PORT,
     environment: result.data.NODE_ENV,
     logLevel: result.data.LOG_LEVEL,
+    ...([result.data.APP_ORIGIN, result.data.SUPABASE_URL, result.data.SUPABASE_ANON_KEY].every((value) => value === undefined) ? {} : {
+      appOrigin: result.data.APP_ORIGIN ?? `http://${result.data.HOST}:${result.data.PORT}`,
+    }),
+    ...(result.data.SUPABASE_URL === undefined ? {} : { supabaseUrl: result.data.SUPABASE_URL }),
+    ...(result.data.SUPABASE_ANON_KEY === undefined ? {} : { supabaseAnonKey: result.data.SUPABASE_ANON_KEY }),
     ...(result.data.ANTHROPIC_API_KEY === undefined ? {} : {
       anthropicApiKey: result.data.ANTHROPIC_API_KEY,
       anthropicModel: result.data.ANTHROPIC_MODEL,

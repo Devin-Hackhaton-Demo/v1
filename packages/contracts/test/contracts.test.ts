@@ -127,6 +127,81 @@ test('rejects malformed chat requests', () => {
   }
 });
 
+const textBlock = { type: 'text', text: 'Describe this image.' };
+const imageBlock = { type: 'image', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' };
+
+test('accepts mixed text and image content blocks', () => {
+  const request = {
+    messages: [
+      { role: 'user', content: [textBlock, imageBlock] },
+      { role: 'assistant', content: 'A png.' },
+      { role: 'user', content: [imageBlock, textBlock, imageBlock] },
+    ],
+  };
+  assert.deepEqual(chatRequestSchema.parse(request), request);
+  const atLimits = {
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', media_type: 'image/gif', data: 'A'.repeat(2_800_000) },
+        ...Array.from({ length: 7 }, () => textBlock),
+      ],
+    }],
+  };
+  assert.deepEqual(chatRequestSchema.parse(atLimits), atLimits);
+});
+
+test('rejects malformed content block arrays', () => {
+  const withContent = (content: unknown) => ({ messages: [{ role: 'user', content }] });
+  for (const input of [
+    withContent([]),
+    withContent(Array.from({ length: 9 }, () => textBlock)),
+    withContent([{ ...imageBlock, media_type: 'image/svg+xml' }]),
+    withContent([{ ...imageBlock, data: 'not base64!!' }]),
+    withContent([{ ...imageBlock, data: 'abcde' }]),
+    withContent([{ ...imageBlock, data: '' }]),
+    withContent([{ ...imageBlock, data: 'A'.repeat(2_800_004) }]),
+    withContent([{ type: 'text', text: '' }]),
+    withContent([{ type: 'text', text: 'x'.repeat(65_537) }]),
+    withContent([{ ...textBlock, extra: true }]),
+    withContent([{ ...imageBlock, source: 'inline' }]),
+    withContent([{ type: 'image', media_type: 'image/png' }]),
+    withContent(['just a string']),
+  ]) {
+    assert.equal(chatRequestSchema.safeParse(input).success, false);
+  }
+});
+
+test('caps a chat request at four image blocks in total', () => {
+  const four = {
+    messages: [
+      { role: 'user', content: [imageBlock] },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [imageBlock, imageBlock, imageBlock] },
+    ],
+  };
+  assert.deepEqual(chatRequestSchema.parse(four), four);
+  const five = {
+    messages: [
+      { role: 'user', content: [imageBlock, imageBlock, imageBlock] },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [imageBlock, imageBlock] },
+    ],
+  };
+  assert.equal(chatRequestSchema.safeParse(five).success, false);
+});
+
+test('caps the combined text of text blocks per message', () => {
+  const halves = [
+    { type: 'text', text: 'x'.repeat(32_768) },
+    { type: 'text', text: 'y'.repeat(32_768) },
+  ];
+  const atLimit = { messages: [{ role: 'user', content: halves }] };
+  assert.deepEqual(chatRequestSchema.parse(atLimit), atLimit);
+  const over = { messages: [{ role: 'user', content: [...halves, { type: 'text', text: 'z' }] }] };
+  assert.equal(chatRequestSchema.safeParse(over).success, false);
+});
+
 test('accepts the documented chat envelopes', () => {
   assert.deepEqual(chatResponseSchema.parse(chatSuccess), chatSuccess);
   assert.deepEqual(chatResponseSchema.parse(chatFailure), chatFailure);

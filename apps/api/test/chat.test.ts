@@ -10,6 +10,12 @@ import { DEFAULT_SYSTEM_PROMPT, registerChatRoute } from '../src/chat.js';
 import { loadConfig } from '../src/config.js';
 
 const API_KEY = 'sk-ant-KEY_SENTINEL';
+const CSRF_TOKEN = 'a'.repeat(43);
+const authenticatedHeaders = {
+  origin: 'http://127.0.0.1:3000',
+  cookie: `coffeenator-access=AUTH_ACCESS_SENTINEL; coffeenator-refresh=AUTH_REFRESH_SENTINEL; coffeenator-csrf=${CSRF_TOKEN}`,
+  'x-csrf-token': CSRF_TOKEN,
+};
 const validPayload = {
   messages: [
     { role: 'user', content: 'Hello?' },
@@ -48,11 +54,22 @@ function createChatApp(t: TestContext, options: {
   const config = loadConfig({
     NODE_ENV: 'test',
     LOG_LEVEL: options.logStream ? 'info' : 'silent',
+    SUPABASE_URL: 'https://auth.example.test',
+    SUPABASE_ANON_KEY: 'test-public-anon-key',
     ...(options.withKey === false ? {} : { ANTHROPIC_API_KEY: API_KEY }),
     ...(options.model === undefined ? {} : { ANTHROPIC_MODEL: options.model }),
   });
   const app = buildApp(config, {
     chatFetch,
+    authFetch: async (input, init) => {
+      assert.equal(String(input), 'https://auth.example.test/auth/v1/user');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer AUTH_ACCESS_SENTINEL');
+      return Response.json({
+        id: 'chat-test-user',
+        email: 'chat@example.test',
+        user_metadata: { ai_processing_consent: { accepted: true, version: '2026-09-19' } },
+      });
+    },
     ...(options.logStream ? { logStream: options.logStream } : {}),
   });
   t.after(() => app.close());
@@ -95,7 +112,7 @@ test('rejects malformed chat requests with a sanitized validation envelope', asy
     { messages: [{ role: 'assistant', content: 'hi' }] },
     { messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }] },
   ]) {
-    const response = await app.inject({ method: 'POST', url: '/api/chat', payload });
+    const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload });
     assert.equal(response.statusCode, 400);
     const envelope = chatResponseSchema.parse(response.json());
     assert.equal(envelope.ok, false);
@@ -111,7 +128,7 @@ test('rejects malformed chat requests with a sanitized validation envelope', asy
 
 test('reports an unconfigured chat backend without calling upstream', async (t) => {
   const { app, calls } = createChatApp(t, { withKey: false });
-  const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
   assert.equal(response.statusCode, 503);
   const envelope = chatResponseSchema.parse(response.json());
   assert.equal(envelope.ok, false);
@@ -131,7 +148,7 @@ for (const [name, responder, expectedLog] of [
   test(`maps ${name} to a sanitized 502 without leaking details`, async (t) => {
     const { messages, logStream } = collectLogs();
     const { app } = createChatApp(t, { logStream, responder });
-    const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+    const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
     assert.equal(response.statusCode, 502);
     const envelope = chatResponseSchema.parse(response.json());
     assert.equal(envelope.ok, false);
@@ -152,7 +169,7 @@ for (const [name, responder, expectedLog] of [
 test('proxies a chat exchange and concatenates upstream text blocks', async (t) => {
   const { messages, logStream } = collectLogs();
   const { app, calls } = createChatApp(t, { logStream, responder: anthropicResponse, model: 'claude-test-model' });
-  const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
   assert.equal(response.statusCode, 200);
   const envelope = chatResponseSchema.parse(response.json());
   assert.equal(envelope.ok, true);
@@ -189,7 +206,7 @@ test('proxies a chat exchange and concatenates upstream text blocks', async (t) 
 test('falls back to the default Anthropic model and the default system prompt', async (t) => {
   const { app, calls } = createChatApp(t, { responder: anthropicResponse });
   const response = await app.inject({
-    method: 'POST', url: '/api/chat',
+    method: 'POST', url: '/api/chat', headers: authenticatedHeaders,
     payload: { messages: [{ role: 'user', content: 'Greet the world.' }] },
   });
   assert.equal(response.statusCode, 200);
@@ -205,7 +222,7 @@ test('falls back to the default Anthropic model and the default system prompt', 
 
 test('lets a caller-provided system prompt override the default', async (t) => {
   const { app, calls } = createChatApp(t, { responder: anthropicResponse });
-  const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
   assert.equal(response.statusCode, 200);
   const call = calls[0];
   assert.ok(call);
@@ -215,13 +232,90 @@ test('lets a caller-provided system prompt override the default', async (t) => {
   assert.notEqual((body as { system?: unknown }).system, DEFAULT_SYSTEM_PROMPT);
 });
 
+const imageBlock = { type: 'image', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' };
+
+test('proxies image content blocks with the documented upstream mapping', async (t) => {
+  const { app, calls } = createChatApp(t, { responder: anthropicResponse, model: 'claude-test-model' });
+  const response = await app.inject({
+    method: 'POST', url: '/api/chat', headers: authenticatedHeaders,
+    payload: {
+      messages: [{
+        role: 'user',
+        content: [{ type: 'text', text: 'What is in this image?' }, imageBlock],
+      }],
+      system: 'Be concise.',
+    },
+  });
+  assert.equal(response.statusCode, 200);
+  const envelope = chatResponseSchema.parse(response.json());
+  assert.equal(envelope.ok, true);
+  assert.equal(calls.length, 1);
+  const call = calls[0];
+  assert.ok(call);
+  assert.deepEqual(JSON.parse(String(call.init.body)), {
+    model: 'claude-test-model',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'What is in this image?' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg==' } },
+      ],
+    }],
+    system: 'Be concise.',
+  });
+});
+
+test('rejects too many image blocks and invalid base64 data without calling upstream', async (t) => {
+  const { app, calls } = createChatApp(t);
+  for (const payload of [
+    { messages: [{ role: 'user', content: Array.from({ length: 5 }, () => imageBlock) }] },
+    {
+      messages: [
+        { role: 'user', content: [imageBlock, imageBlock, imageBlock] },
+        { role: 'assistant', content: 'ok' },
+        { role: 'user', content: [imageBlock, imageBlock] },
+      ],
+    },
+    { messages: [{ role: 'user', content: [{ ...imageBlock, data: 'not base64!!' }] }] },
+    { messages: [{ role: 'user', content: [{ ...imageBlock, data: 'abcde' }] }] },
+  ]) {
+    const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload });
+    assert.equal(response.statusCode, 400);
+    const envelope = chatResponseSchema.parse(response.json());
+    assert.equal(envelope.ok, false);
+    if (!envelope.ok) {
+      assert.deepEqual(envelope.error, {
+        code: 'VALIDATION_ERROR', message: 'Invalid chat request.', retryable: false,
+      });
+    }
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('accepts image payloads above the default 1 MiB body limit', async (t) => {
+  const { app, calls } = createChatApp(t, { responder: anthropicResponse });
+  const response = await app.inject({
+    method: 'POST', url: '/api/chat', headers: authenticatedHeaders,
+    payload: {
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', media_type: 'image/jpeg', data: 'A'.repeat(2_000_000) }],
+      }],
+    },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(chatResponseSchema.parse(response.json()).ok, true);
+  assert.equal(calls.length, 1);
+});
+
 test('rate limits repeated chat requests with a retryable envelope and Retry-After', async (t) => {
   const app = createRateLimitedApp(t, { limit: 2, windowMs: 60_000 });
   for (let i = 0; i < 2; i += 1) {
-    const response = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+    const response = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
     assert.equal(response.statusCode, 200);
   }
-  const limited = await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload });
+  const limited = await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload });
   assert.equal(limited.statusCode, 429);
   const envelope = chatResponseSchema.parse(limited.json());
   assert.equal(envelope.ok, false);
@@ -236,8 +330,8 @@ test('rate limits repeated chat requests with a retryable envelope and Retry-Aft
 
 test('allows chat requests again once the rate limit window has passed', async (t) => {
   const app = createRateLimitedApp(t, { limit: 1, windowMs: 50 });
-  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 200);
-  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 429);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload })).statusCode, 429);
   await sleep(75);
-  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', payload: validPayload })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/chat', headers: authenticatedHeaders, payload: validPayload })).statusCode, 200);
 });

@@ -4,11 +4,16 @@ import Fastify, { LogController } from 'fastify';
 import { localhostHostValidation, localhostOriginValidation } from '@modelcontextprotocol/fastify';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
+import { requireAiConsent } from '../../../api/_lib/auth.mjs';
 import type { Config } from './config.js';
 import { buildMcpServer } from './mcp.js';
 import { registerChatRoute } from './chat.js';
 
-export function buildApp(config: Config, options: { logStream?: Writable; chatFetch?: typeof fetch } = {}) {
+export function buildApp(config: Config, options: {
+  logStream?: Writable;
+  chatFetch?: typeof fetch;
+  authFetch?: typeof fetch;
+} = {}) {
   const app = Fastify({
     genReqId: () => randomUUID(),
     requestIdHeader: false,
@@ -55,7 +60,21 @@ export function buildApp(config: Config, options: { logStream?: Writable; chatFe
     });
   });
   app.get('/health', async () => ({ status: 'ok', mode: 'local' }));
-  registerChatRoute(app, config, options.chatFetch ?? fetch);
+  app.register(async (chatApp) => {
+    chatApp.addHook('onRequest', async (request, reply) => {
+      const user = await requireAiConsent(request.raw, reply.raw, {
+        env: {
+          APP_ORIGIN: config.appOrigin ?? `http://${config.host}:${config.port}`,
+          SUPABASE_URL: config.supabaseUrl,
+          SUPABASE_ANON_KEY: config.supabaseAnonKey,
+          NODE_ENV: config.environment,
+        },
+        fetchImpl: options.authFetch ?? fetch,
+      });
+      if (!user || reply.raw.writableEnded) return reply.hijack();
+    });
+    registerChatRoute(chatApp, config, options.chatFetch ?? fetch);
+  });
   app.all('/mcp', async (request, reply) => {
     reply.hijack();
     const rawRequest = Object.assign(request.raw, { method: request.method, url: request.url });

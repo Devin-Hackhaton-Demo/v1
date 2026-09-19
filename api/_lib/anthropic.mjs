@@ -10,6 +10,16 @@ const MAX_OUTPUT_TOKENS = 1024;
 const UPSTREAM_TIMEOUT_MS = 60000;
 
 export const MAX_BODY_BYTES = 262144;
+// /api/chat alone accepts larger bodies so base64 screenshots fit
+// (Vercel's platform cap is ~4.5 MB, so 4 MiB keeps headroom).
+export const MAX_CHAT_BODY_BYTES = 4194304;
+
+const MAX_BLOCKS_PER_MESSAGE = 8;
+const MAX_IMAGES_PER_REQUEST = 4;
+const MAX_IMAGE_BASE64_CHARS = 2800000;
+const IMAGE_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+// Shape check only (charset + padding position + length % 4) — never decoded here.
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export const DEFAULT_SYSTEM_PROMPT = [
   "You are Coffeenator's assistant. Coffeenator is a personal AI home:",
@@ -51,6 +61,50 @@ export function createRateLimiter({ limit = RATE_LIMIT_DEFAULTS.limit, windowMs 
 
 const isPlainObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
+function validateContentBlocks(blocks, index, errors, imageCounter) {
+  if (blocks.length === 0 || blocks.length > MAX_BLOCKS_PER_MESSAGE) {
+    errors.push(`messages[${index}].content must contain between 1 and ${MAX_BLOCKS_PER_MESSAGE} blocks.`);
+    return;
+  }
+  let textTotal = 0;
+  blocks.forEach((block, blockIndex) => {
+    const label = `messages[${index}].content[${blockIndex}]`;
+    if (!isPlainObject(block)) {
+      errors.push(`${label} must be an object with a "type" of "text" or "image".`);
+      return;
+    }
+    if (block.type === 'text') {
+      if (Object.keys(block).some((key) => !['type', 'text'].includes(key))) {
+        errors.push(`${label} may only contain "type" and "text".`);
+        return;
+      }
+      if (typeof block.text !== 'string' || block.text.length === 0) {
+        errors.push(`${label}.text must be a non-empty string.`);
+      } else {
+        textTotal += block.text.length;
+        if (block.text.length > MAX_CONTENT_CHARS) errors.push(`${label}.text may be at most ${MAX_CONTENT_CHARS} characters.`);
+      }
+    } else if (block.type === 'image') {
+      if (Object.keys(block).some((key) => !['type', 'media_type', 'data'].includes(key))) {
+        errors.push(`${label} may only contain "type", "media_type" and "data".`);
+        return;
+      }
+      imageCounter.count += 1;
+      if (!IMAGE_MEDIA_TYPES.includes(block.media_type)) {
+        errors.push(`${label}.media_type must be one of ${IMAGE_MEDIA_TYPES.join(', ')}.`);
+      }
+      if (typeof block.data !== 'string' || block.data.length === 0 || block.data.length % 4 !== 0 || !BASE64_PATTERN.test(block.data)) {
+        errors.push(`${label}.data must be a base64 string.`);
+      } else if (block.data.length > MAX_IMAGE_BASE64_CHARS) {
+        errors.push(`${label}.data may be at most ${MAX_IMAGE_BASE64_CHARS} base64 characters.`);
+      }
+    } else {
+      errors.push(`${label}.type must be "text" or "image".`);
+    }
+  });
+  if (textTotal > MAX_CONTENT_CHARS) errors.push(`messages[${index}] may contain at most ${MAX_CONTENT_CHARS} text characters across its blocks.`);
+}
+
 export function validateChatRequest(body) {
   if (!isPlainObject(body)) return { ok: false, errors: ['Request body must be a JSON object with a "messages" array.'] };
   const errors = [];
@@ -61,15 +115,23 @@ export function validateChatRequest(body) {
   } else if (messages.length > MAX_MESSAGES) {
     errors.push(`"messages" may contain at most ${MAX_MESSAGES} entries.`);
   } else {
+    const imageCounter = { count: 0 };
     messages.forEach((message, index) => {
       if (!isPlainObject(message) || Object.keys(message).some((key) => !['role', 'content'].includes(key))) {
         errors.push(`messages[${index}] must be an object with only "role" and "content".`);
         return;
       }
       if (message.role !== 'user' && message.role !== 'assistant') errors.push(`messages[${index}].role must be "user" or "assistant".`);
-      if (typeof message.content !== 'string' || message.content.length === 0) errors.push(`messages[${index}].content must be a non-empty string.`);
-      else if (message.content.length > MAX_CONTENT_CHARS) errors.push(`messages[${index}].content may be at most ${MAX_CONTENT_CHARS} characters.`);
+      if (typeof message.content === 'string') {
+        if (message.content.length === 0) errors.push(`messages[${index}].content must be a non-empty string.`);
+        else if (message.content.length > MAX_CONTENT_CHARS) errors.push(`messages[${index}].content may be at most ${MAX_CONTENT_CHARS} characters.`);
+      } else if (Array.isArray(message.content)) {
+        validateContentBlocks(message.content, index, errors, imageCounter);
+      } else {
+        errors.push(`messages[${index}].content must be a non-empty string or an array of content blocks.`);
+      }
     });
+    if (imageCounter.count > MAX_IMAGES_PER_REQUEST) errors.push(`A request may contain at most ${MAX_IMAGES_PER_REQUEST} image blocks in total.`);
     if (isPlainObject(messages[0]) && messages[0].role !== 'user') errors.push('The first message must use the "user" role.');
     if (isPlainObject(messages.at(-1)) && messages.at(-1).role !== 'user') errors.push('The last message must use the "user" role.');
   }
@@ -78,6 +140,15 @@ export function validateChatRequest(body) {
     else if (system.length > MAX_SYSTEM_CHARS) errors.push(`"system" may be at most ${MAX_SYSTEM_CHARS} characters.`);
   }
   return { ok: errors.length === 0, errors };
+}
+
+// String content passes through unchanged; block arrays map to the Anthropic
+// content block shapes (images become base64 sources).
+function toUpstreamContent(content) {
+  if (typeof content === 'string') return content;
+  return content.map((block) => (block.type === 'text'
+    ? { type: 'text', text: block.text }
+    : { type: 'image', source: { type: 'base64', media_type: block.media_type, data: block.data } }));
 }
 
 export async function callAnthropic({ messages, system }, env, fetchImpl = fetch) {
@@ -94,7 +165,7 @@ export async function callAnthropic({ messages, system }, env, fetchImpl = fetch
       body: JSON.stringify({
         model,
         max_tokens: MAX_OUTPUT_TOKENS,
-        messages: messages.map(({ role, content }) => ({ role, content })),
+        messages: messages.map(({ role, content }) => ({ role, content: toUpstreamContent(content) })),
         system: effectiveSystem,
       }),
       signal: controller.signal,

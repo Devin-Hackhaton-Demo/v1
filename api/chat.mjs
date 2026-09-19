@@ -1,4 +1,4 @@
-import { createRateLimiter, errorEnvelope, handleChatRequest, MAX_BODY_BYTES } from './_lib/anthropic.mjs';
+import { createRateLimiter, errorEnvelope, handleChatRequest, MAX_CHAT_BODY_BYTES } from './_lib/anthropic.mjs';
 
 // Per-warm-instance limiter: each Vercel instance counts independently, so the
 // effective global limit scales with concurrent warm instances. Accepted for v1.
@@ -24,8 +24,8 @@ export default async function handler(request, response) {
     return;
   }
   const declaredLength = Number(request.headers['content-length']);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    response.status(400).json(errorEnvelope('VALIDATION_ERROR', 'Request body may be at most 256 KiB.', false));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_CHAT_BODY_BYTES) {
+    response.status(400).json(errorEnvelope('VALIDATION_ERROR', 'Request body may be at most 4 MiB.', false));
     return;
   }
   let body = request.body;

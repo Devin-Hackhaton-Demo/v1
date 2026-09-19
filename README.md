@@ -105,10 +105,17 @@ during the state-machine tests.
 ## Deployment (Vercel)
 
 The user deploys to Vercel: `vercel.json` serves the static UI
-(`docs/design/preview`) as the site root and `api/chat.mjs` as the serverless
-Anthropic proxy. Set `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` as environment
-variables in Vercel. No Supabase credentials are needed for the deployed demo
-site.
+(`docs/design/preview`) as the site root and the `api/` directory as serverless
+functions (Anthropic chat proxy, sign-in, user connections). Environment
+variables to set in Vercel:
+
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` — chat proxy
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — sign-in
+  and user connections (the service-role key stays server-side; it is required
+  for connection health checks that read secrets back from Supabase Vault)
+
+Without the Supabase variables the site still serves and chat works; sign-in
+and connections return a clear "not configured" error.
 
 ## Security notes
 
