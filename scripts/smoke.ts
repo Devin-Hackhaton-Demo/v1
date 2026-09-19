@@ -19,8 +19,12 @@ import {
   downloadArtifact,
   getContext,
   getProject,
+  getUserConnectionSecret,
+  listUserConnections,
   prepareRun,
+  revokeUserConnection,
   saveContext,
+  storeUserConnection,
   uploadArtifact,
   type DbClient,
 } from '../packages/db/src/index.ts';
@@ -275,6 +279,106 @@ const { count: foreignRuns } = await owner
   .eq('task_id', conflictTask.id);
 check('prepare_run: still zero runs after the foreign attempt', foreignRuns === 0,
   `run count: ${foreignRuns}`);
+
+console.log('\n8. user_connections + Vault gates');
+
+// DUMMY secrets only — never a real credential. Everything created here is
+// cleaned up at the end of this section (Vault rows via revoke, table rows
+// via the service client).
+const dummySecret = `dummy-secret-${Date.now()}`;
+const connLabel = `smoke-${Date.now()}@example.test`;
+const ownerId = (await owner.auth.getUser()).data.user?.id;
+if (!ownerId) throw new Error('owner user id unavailable');
+
+// Gate 8.1: store returns the row without any secret material or Vault ref.
+const conn = await storeUserConnection(owner, {
+  provider: 'google',
+  secret: dummySecret,
+  label: connLabel,
+  scopes: ['email'],
+  metadata: { smoke: true },
+});
+check('store: row has provider/label/scopes',
+  conn.provider === 'google' && conn.label === connLabel
+  && Array.isArray(conn.scopes) && conn.scopes.includes('email'));
+check('store: response contains no secret material',
+  !JSON.stringify(conn).includes(dummySecret));
+check('store: response has no secret_ref key',
+  !('secret_ref' in (conn as Record<string, unknown>)));
+
+// Gate 8.2: user scoping — the member must not see the owner's connection.
+const memberConns = await listUserConnections(member);
+check('member list excludes the owner connection',
+  memberConns.every((c) => c.id !== conn.id));
+
+// Gate 8.3: authenticated callers cannot execute the secret readback RPC.
+const { data: memberSecret, error: memberSecretError } = await member.rpc(
+  'get_user_connection_secret',
+  { p_connection_id: conn.id },
+);
+check('member secret readback: permission denied',
+  memberSecretError !== null && memberSecret === null,
+  memberSecretError ? undefined : 'the RPC succeeded!');
+
+// Gate 8.4: the service role reads back exactly the stored secret.
+const secretBack = await getUserConnectionSecret(service, conn.id);
+check('service secret readback is byte-equal', secretBack === dummySecret);
+
+// Gate 8.5: direct INSERT from an authenticated client → RLS error
+// (no insert policy — writes must go through the SECURITY DEFINER RPCs).
+const { error: directInsertError } = await owner.from('user_connections').insert({
+  user_id: ownerId,
+  provider: 'google',
+  label: `direct-${connLabel}`,
+});
+check('authenticated direct insert: RLS error', directInsertError !== null,
+  directInsertError ? undefined : 'the insert succeeded!');
+
+// Gate 8.6: upsert — same provider+label with a NEW secret keeps the row id
+// and rotates the Vault secret in place.
+const dummySecret2 = `${dummySecret}-rotated`;
+const connAgain = await storeUserConnection(owner, {
+  provider: 'google',
+  secret: dummySecret2,
+  label: connLabel,
+});
+check('re-store with same provider+label: same row id', connAgain.id === conn.id,
+  `first: ${conn.id}, second: ${connAgain.id}`);
+const rotatedBack = await getUserConnectionSecret(service, conn.id);
+check('service readback returns the NEW secret', rotatedBack === dummySecret2);
+
+// Gate 8.7: revoke deletes the Vault row → revoked_at set, service readback
+// now raises NOT_FOUND (in-script proof that the secret is gone/unreachable).
+const revoked = await revokeUserConnection(owner, conn.id);
+check('revoke: revoked_at set', revoked.revoked_at !== null);
+const revokedAgain = await revokeUserConnection(owner, conn.id);
+check('revoke is idempotent (row unchanged)',
+  revokedAgain.revoked_at === revoked.revoked_at);
+let revokedReadError: Error | null = null;
+try {
+  await getUserConnectionSecret(service, conn.id);
+} catch (e) {
+  revokedReadError = e as Error;
+}
+check('service readback after revoke: NOT_FOUND',
+  revokedReadError !== null && revokedReadError.message.includes('NOT_FOUND'),
+  revokedReadError ? revokedReadError.message : 'the readback succeeded!');
+
+// Gate 8.8: cleanup — remove the rows this section created and verify.
+const { error: connCleanupError } = await service
+  .from('user_connections')
+  .delete()
+  .eq('user_id', ownerId)
+  .eq('label', connLabel);
+check('user_connections cleanup: delete succeeded', connCleanupError === null,
+  connCleanupError?.message);
+const { count: leftoverConns } = await service
+  .from('user_connections')
+  .select('*', { count: 'exact', head: true })
+  .eq('user_id', ownerId)
+  .eq('label', connLabel);
+check('user_connections cleanup: zero leftover rows', leftoverConns === 0,
+  `leftover: ${leftoverConns}`);
 
 console.log('\nTakarítás (service role)…');
 await service.storage.from('artifacts').remove([artifact.storage_path]);

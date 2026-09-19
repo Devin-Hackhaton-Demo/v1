@@ -440,6 +440,38 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      user_connections: {
+        Row: {
+          id: string;
+          user_id: string;
+          provider: Database['public']['Enums']['provider_kind'];
+          label: string;
+          /** vault.secrets.id reference only — never the secret itself. */
+          secret_ref: string | null;
+          scopes: string[];
+          /** Non-secret provider metadata only. */
+          metadata: Json;
+          created_at: string;
+          updated_at: string;
+          revoked_at: string | null;
+        };
+        // Writes go through the store/revoke RPCs (no insert/update RLS
+        // policies); the Insert/Update shapes exist for the service role.
+        Insert: {
+          id?: string;
+          user_id: string;
+          provider: Database['public']['Enums']['provider_kind'];
+          label?: string;
+          secret_ref?: string | null;
+          scopes?: string[];
+          metadata?: Json;
+          created_at?: string;
+          updated_at?: string;
+          revoked_at?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['user_connections']['Insert']>;
+        Relationships: [];
+      };
     };
     Views: {
       [_ in never]: never;
@@ -519,6 +551,24 @@ export type Database = {
         };
         Returns: Json;
       };
+      store_user_connection: {
+        Args: {
+          p_provider: Database['public']['Enums']['provider_kind'];
+          p_secret: string;
+          p_label?: string;
+          p_scopes?: string[];
+          p_metadata?: Json;
+        };
+        Returns: Json;
+      };
+      revoke_user_connection: {
+        Args: { p_connection_id: string };
+        Returns: Json;
+      };
+      get_user_connection_secret: {
+        Args: { p_connection_id: string };
+        Returns: string;
+      };
     };
     Enums: {
       membership_role: 'owner' | 'member';
@@ -547,6 +597,7 @@ export type Database = {
       action_kind: 'github_issue_create';
       connection_kind: 'github';
       approval_subject: 'run' | 'external_action';
+      provider_kind: 'google' | 'github' | 'vercel' | 'composio' | 'supabase' | 'notion';
     };
     CompositeTypes: {
       [_ in never]: never;

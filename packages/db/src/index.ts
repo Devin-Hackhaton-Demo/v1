@@ -44,3 +44,11 @@ export {
   type FailRunInput,
   type RunClosureReceipt,
 } from './helpers/statemachine.ts';
+export {
+  storeUserConnection,
+  listUserConnections,
+  revokeUserConnection,
+  getUserConnectionSecret,
+  type StoreUserConnectionInput,
+  type UserConnectionPublic,
+} from './helpers/user-connections.ts';
