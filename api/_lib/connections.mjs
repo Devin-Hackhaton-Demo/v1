@@ -206,18 +206,37 @@ export const PROVIDER_HEALTH_CHECKS = {
   },
   // Composio REST API v3.1 (verified against the docs on 2026-09-19):
   //   base URL https://backend.composio.dev/api/v3.1, project API keys go in
-  //   the x-api-key header. Cheapest authenticated GET is the connected
-  //   accounts list (limit=1); its response includes a required total_items.
+  //   the x-api-key header. The connected accounts list includes a required
+  //   total_items and items[].toolkit.slug / items[].status, from which the
+  //   ACTIVE Google toolkit connections are counted (first 100 accounts).
   //   Sources: https://docs.composio.dev/reference (base URL + auth header),
   //   https://docs.composio.dev/reference/api-reference/connected-accounts/getConnectedAccounts
   composio: {
     request: (secret) => ({
-      url: 'https://backend.composio.dev/api/v3.1/connected_accounts?limit=1',
+      url: 'https://backend.composio.dev/api/v3.1/connected_accounts?limit=100',
       headers: { 'x-api-key': secret },
     }),
     account: (payload) => `${Number.isFinite(Number(payload?.total_items)) ? Number(payload.total_items) : 0} connected account(s)`,
+    details: (payload) => ({
+      toolkits: Object.fromEntries(COMPOSIO_GOOGLE_TOOLKITS.map((slug) => [slug, (Array.isArray(payload?.items) ? payload.items : [])
+        .filter((item) => item?.toolkit?.slug === slug && item?.status === 'ACTIVE').length])),
+    }),
+  },
+  // https://docs.anthropic.com/en/api/models-list
+  anthropic: {
+    request: (secret) => ({ url: 'https://api.anthropic.com/v1/models', headers: { 'x-api-key': secret, 'anthropic-version': '2023-06-01' } }),
+    account: (payload) => `${Array.isArray(payload?.data) ? payload.data.length : 0} model(s) available`,
+  },
+  // https://platform.openai.com/docs/api-reference/models/list
+  openai: {
+    request: (secret) => ({ url: 'https://api.openai.com/v1/models', headers: { Authorization: `Bearer ${secret}` } }),
+    account: (payload) => `${Array.isArray(payload?.data) ? payload.data.length : 0} model(s) available`,
   },
 };
+
+const COMPOSIO_GOOGLE_TOOLKITS = ['gmail', 'googlecalendar', 'googledrive'];
+// Providers a visitor can check with their own key on the Connectors page.
+export const KEY_CHECK_PROVIDERS = ['composio', 'anthropic', 'openai', 'notion', 'github', 'supabase'];
 
 async function runHealthCheck(provider, secret, fetchImpl) {
   const check = PROVIDER_HEALTH_CHECKS[provider];
@@ -235,7 +254,7 @@ async function runHealthCheck(provider, secret, fetchImpl) {
   if ([401, 403].includes(response.status)) return { provider, healthy: false, reason: 'unauthorized' };
   if (!response.ok) return { provider, healthy: false, reason: 'unreachable' };
   const payload = await response.json().catch(() => null);
-  return { provider, healthy: true, account: check.account(payload) };
+  return { provider, healthy: true, account: check.account(payload), ...(check.details ? check.details(payload) : {}) };
 }
 
 export async function handleCheckConnectionRequest(jwt, body, env, fetchImpl = fetch) {
@@ -279,13 +298,14 @@ export async function handleCheckConnectionRequest(jwt, body, env, fetchImpl = f
   return { status: 200, payload: successEnvelope(data) };
 }
 
-// Stateless Composio key check for the auth-free preview: the key arrives in
-// the request body, is used once for the provider health call and is never
+// Stateless key check for the auth-free preview: the key arrives in the
+// request body, is used once for the provider health call and is never
 // stored, logged or echoed. Only the non-secret health summary is returned.
-export function handleComposioKeyCheck(body, fetchImpl = fetch) {
-  if (!isPlainObject(body) || Object.keys(body).some((key) => key !== 'apiKey')
+export function handleKeyCheck(body, fetchImpl = fetch) {
+  if (!isPlainObject(body) || Object.keys(body).some((key) => !['provider', 'apiKey'].includes(key))
+    || !KEY_CHECK_PROVIDERS.includes(body.provider)
     || typeof body.apiKey !== 'string' || body.apiKey.length === 0 || body.apiKey.length > MAX_SECRET_CHARS) {
-    return Promise.resolve(validationError(`Request body must be a JSON object with an "apiKey" string of 1 to ${MAX_SECRET_CHARS} characters.`));
+    return Promise.resolve(validationError(`Request body must be a JSON object with "provider" (one of ${KEY_CHECK_PROVIDERS.join(', ')}) and an "apiKey" string of 1 to ${MAX_SECRET_CHARS} characters.`));
   }
-  return runHealthCheck('composio', body.apiKey, fetchImpl).then((data) => ({ status: 200, payload: successEnvelope(data) }));
+  return runHealthCheck(body.provider, body.apiKey, fetchImpl).then((data) => ({ status: 200, payload: successEnvelope(data) }));
 }

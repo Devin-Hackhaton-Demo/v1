@@ -12,7 +12,13 @@ and agent runs execute only after explicit owner approval. Surfaces: `packages/d
 `apps/worker` (activation worker), `apps/api` (Fastify + MCP server, loopback-only),
 a static demo UI under `docs/design/preview/`, and a server-side Anthropic-backed
 chat proxy (`POST /api/chat`: serverless `api/chat.mjs` and a local proxy in the
-preview server).
+preview server). The MCP server is local-only (`npm run dev` →
+`http://127.0.0.1:3000/mcp`); it is not deployed.
+
+**No authentication in the deployed preview (user decision, 2026-09-19).** The app
+opens directly; `/api/chat` and `/api/keys/check` are public and protected only by
+per-IP rate limits (10/60 s per warm instance). `api/_lib/auth.mjs` and the `/auth`
+page exist but are not wired into the app — do not re-add a login gate.
 
 ## Critical flows
 
@@ -36,6 +42,17 @@ preview server).
   (`packages/db/src/helpers/artifacts.ts`); limits 1 MiB/file (DB CHECK),
   5 files/save, 20 MiB/project (helper layer); private `artifacts` bucket at
   `project_id/artifact_id/filename`.
+- **Bring-your-own-key connectors** (Connectors page): every connector takes the
+  user's own key — Composio, Anthropic (Claude card), OpenAI (ChatGPT card),
+  Notion, GitHub, Supabase; Gmail/Calendar/Drive connect through the user's
+  Composio project (status = ACTIVE `gmail`/`googlecalendar`/`googledrive`
+  accounts among the first 100). Keys live ONLY in the browser's localStorage
+  (`coffeenator-preview-keys-v1`). `POST /api/keys/check {provider, apiKey}`
+  (`api/keys/check.mjs`, `handleKeyCheck` in `api/_lib/connections.mjs`) is
+  stateless: one outbound call per check using `PROVIDER_HEALTH_CHECKS`, response
+  = `{provider, healthy, account|reason[, toolkits]}` only. A new key is kept
+  only after the provider accepts it. Each card has an in-dialog guide with the
+  official key page; nothing is labelled "Coming soon".
 - **Chat proxy**: `ANTHROPIC_API_KEY` lives only server-side (serverless
   `api/chat.mjs` / the local preview proxy). It must never reach the client
   bundle, response bodies, or logs — in any code path, including errors.
@@ -77,6 +94,12 @@ preview server).
   8 KiB `summary`, 32 KiB brief (plus the artifact limits above).
 - Provider account payloads reaching the UI unfiltered — only allowlisted,
   sanitized metadata may be shown (AGENTS.md design-preview rules).
+- A user API key persisted server-side (DB, Vault, cache), logged, echoed in any
+  response/error, placed in a URL, or sent to any host other than the provider's
+  documented endpoint in `PROVIDER_HEALTH_CHECKS`. `/api/keys/check` must stay
+  allowlisted (`KEY_CHECK_PROVIDERS`), size-capped (4096 chars) and rate-limited.
+- Known accepted risk: the public `/api/chat` spends the server's Anthropic
+  credit; only the per-IP limit protects it.
 
 ## Maintainability
 
@@ -100,7 +123,9 @@ preview server).
 - Gates keep their exact expected counts: `npm test` = 47 vitest domain tests,
   `npm run smoke` = 40, `npm run test:statemachine` = 22, `npm run test:e2e` = 20
   (incl. the ≤ 15 s claim-latency gate), plus `npm run test:api` (apps/api) and
-  the UI suites (`node --test docs/design/preview/*.test.mjs`). A changed count
+  the UI suites (`node --test docs/design/preview/*.test.mjs docs/design/preview/auth/*.test.mjs`
+  = 98, incl. the key-check endpoint tests: per-provider URL/header, key never
+  echoed, 400 before any network call, 429 on the 11th check). A changed count
   needs an explicit, reviewed reason.
 - Mocked happy-path tests are not sufficient proof for the main flow — the main
   loop is proven live (save → prepare → approve → activate → claim → complete).

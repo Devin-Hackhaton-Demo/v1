@@ -7,7 +7,7 @@ import {
   bearerToken,
   CHECK_RATE_LIMIT,
   handleCheckConnectionRequest,
-  handleComposioKeyCheck,
+  handleKeyCheck,
   handleCreateConnectionRequest,
   handleListConnectionsRequest,
   handleLoginRequest,
@@ -142,12 +142,12 @@ async function handleApiRoute(pathname, request, response, { env, fetchImpl, log
     sendJson(response, status, payload);
     return true;
   }
-  if (pathname === '/api/composio/check') {
-    if (!guardPost(request, response, 'Use POST to check a Composio API key.')) return true;
+  if (pathname === '/api/keys/check') {
+    if (!guardPost(request, response, 'Use POST to check an API key.')) return true;
     if (!guardRateLimit(request, response, checkRateLimiter)) return true;
     const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
     if (!read.ok) return true;
-    const { status, payload } = await handleComposioKeyCheck(read.body, fetchImpl);
+    const { status, payload } = await handleKeyCheck(read.body, fetchImpl);
     sendJson(response, status, payload);
     return true;
   }

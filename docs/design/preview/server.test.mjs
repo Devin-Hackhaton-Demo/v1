@@ -661,50 +661,80 @@ test('connection endpoints answer 503 when the Supabase env is not configured', 
   }
 });
 
-// --- Stateless Composio key check (no auth, no storage) ----------------------
+// --- Stateless API key checks (no auth, no storage) --------------------------
 
-const COMPOSIO_URL = 'https://backend.composio.dev/api/v3.1/connected_accounts?limit=1';
+const COMPOSIO_URL = 'https://backend.composio.dev/api/v3.1/connected_accounts?limit=100';
 
-test('POST /api/composio/check verifies the key against Composio and never echoes it', async (t) => {
+function recordingFetch(calls, payload, status = 200) {
+  return async (url, init = {}) => { calls.push({ url: String(url), init }); return jsonResponse(payload, status); };
+}
+
+test('POST /api/keys/check verifies a Composio key, counts active Google toolkits and never echoes the key', async (t) => {
   const apiKey = 'ak_fictional_composio_test_key';
   const calls = [];
-  const base = await serve(t, { env: {}, fetchImpl: async (url, init = {}) => { calls.push({ url: String(url), init }); return jsonResponse({ items: [], total_items: 3 }); } });
-  const response = await postJson(base, '/api/composio/check', { apiKey });
+  const items = [
+    { toolkit: { slug: 'gmail' }, status: 'ACTIVE' },
+    { toolkit: { slug: 'gmail' }, status: 'EXPIRED' },
+    { toolkit: { slug: 'googledrive' }, status: 'ACTIVE' },
+    { toolkit: { slug: 'github' }, status: 'ACTIVE' },
+  ];
+  const base = await serve(t, { env: {}, fetchImpl: recordingFetch(calls, { items, total_items: 4 }) });
+  const response = await postJson(base, '/api/keys/check', { provider: 'composio', apiKey });
   assert.equal(response.status, 200);
   const raw = await response.text();
   assert.ok(!raw.includes(apiKey), 'the response never contains the key');
-  assert.deepEqual(JSON.parse(raw).data, { provider: 'composio', healthy: true, account: '3 connected account(s)' });
+  assert.deepEqual(JSON.parse(raw).data, { provider: 'composio', healthy: true, account: '4 connected account(s)', toolkits: { gmail: 1, googlecalendar: 0, googledrive: 1 } });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, COMPOSIO_URL);
   assert.equal(calls[0].init.headers['x-api-key'], apiKey);
 });
 
-test('POST /api/composio/check reports unauthorized and unreachable without leaking upstream details', async (t) => {
+test('POST /api/keys/check calls the documented endpoint with the right header per provider', async (t) => {
+  const cases = [
+    ['anthropic', 'https://api.anthropic.com/v1/models', (h, k) => h['x-api-key'] === k && h['anthropic-version'] === '2023-06-01', { data: [{ id: 'a' }, { id: 'b' }] }, '2 model(s) available'],
+    ['openai', 'https://api.openai.com/v1/models', (h, k) => h.Authorization === `Bearer ${k}`, { data: [{ id: 'a' }] }, '1 model(s) available'],
+    ['notion', 'https://api.notion.com/v1/users/me', (h, k) => h.Authorization === `Bearer ${k}`, { name: 'Coffee bot' }, 'Coffee bot'],
+    ['github', 'https://api.github.com/user', (h, k) => h.Authorization === `Bearer ${k}`, { login: 'octocat' }, 'octocat'],
+    ['supabase', 'https://api.supabase.com/v1/projects', (h, k) => h.Authorization === `Bearer ${k}`, [{}, {}], '2 project(s)'],
+  ];
+  for (const [provider, url, headerOk, payload, account] of cases) {
+    const calls = [];
+    const base = await serve(t, { env: {}, fetchImpl: recordingFetch(calls, payload) });
+    const apiKey = `fictional-${provider}-key`;
+    const body = await (await postJson(base, '/api/keys/check', { provider, apiKey })).json();
+    assert.deepEqual(body.data, { provider, healthy: true, account }, provider);
+    assert.equal(calls[0].url, url, provider);
+    assert.ok(headerOk(calls[0].init.headers, apiKey), provider);
+  }
+});
+
+test('POST /api/keys/check reports unauthorized and unreachable without leaking upstream details', async (t) => {
   const unauthorized = await serve(t, { env: {}, fetchImpl: async () => jsonResponse({ error: 'fictional upstream detail' }, 401) });
-  const denied = await (await postJson(unauthorized, '/api/composio/check', { apiKey: 'bad-key' })).json();
-  assert.deepEqual(denied.data, { provider: 'composio', healthy: false, reason: 'unauthorized' });
+  const denied = await (await postJson(unauthorized, '/api/keys/check', { provider: 'openai', apiKey: 'bad-key' })).json();
+  assert.deepEqual(denied.data, { provider: 'openai', healthy: false, reason: 'unauthorized' });
   assert.doesNotMatch(JSON.stringify(denied), /fictional upstream|bad-key/);
   const offline = await serve(t, { env: {}, fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } });
-  const unreachable = await (await postJson(offline, '/api/composio/check', { apiKey: 'any-key' })).json();
+  const unreachable = await (await postJson(offline, '/api/keys/check', { provider: 'composio', apiKey: 'any-key' })).json();
   assert.deepEqual(unreachable.data, { provider: 'composio', healthy: false, reason: 'unreachable' });
 });
 
-test('POST /api/composio/check rejects invalid bodies and non-POST methods before any network call', async (t) => {
+test('POST /api/keys/check rejects invalid bodies, unknown providers and non-POST methods before any network call', async (t) => {
   const base = await serve(t, { env: {}, fetchImpl: neverFetch });
-  for (const body of [{}, { apiKey: '' }, { apiKey: 42 }, { apiKey: 'x'.repeat(4097) }, { apiKey: 'x', extra: true }]) {
-    const response = await postJson(base, '/api/composio/check', body);
-    assert.equal(response.status, 400);
+  for (const body of [{}, { provider: 'composio' }, { provider: 'composio', apiKey: '' }, { provider: 'composio', apiKey: 42 }, { provider: 'composio', apiKey: 'x'.repeat(4097) }, { provider: 'composio', apiKey: 'x', extra: true }, { provider: 'google', apiKey: 'x' }, { provider: 'vercel', apiKey: 'x' }]) {
+    const response = await postJson(base, '/api/keys/check', body);
+    assert.equal(response.status, 400, JSON.stringify(body));
     assert.equal((await response.json()).error.code, 'VALIDATION_ERROR');
   }
-  const get = await fetch(base + '/api/composio/check');
+  const get = await fetch(base + '/api/keys/check');
   assert.equal(get.status, 405);
   assert.equal(get.headers.get('allow'), 'POST');
+  assert.equal((await postJson(base, '/api/composio/check', { apiKey: 'x' })).status, 405, 'the old route is gone');
 });
 
-test('POST /api/composio/check rate limits the 11th rapid check from the same IP', async (t) => {
-  const base = await serve(t, { env: {}, fetchImpl: async () => jsonResponse({ total_items: 0 }) });
-  for (let i = 0; i < 10; i += 1) assert.equal((await postJson(base, '/api/composio/check', { apiKey: 'k' })).status, 200);
-  const limited = await postJson(base, '/api/composio/check', { apiKey: 'k' });
+test('POST /api/keys/check rate limits the 11th rapid check from the same IP', async (t) => {
+  const base = await serve(t, { env: {}, fetchImpl: async () => jsonResponse({ items: [], total_items: 0 }) });
+  for (let i = 0; i < 10; i += 1) assert.equal((await postJson(base, '/api/keys/check', { provider: 'composio', apiKey: 'k' })).status, 200);
+  const limited = await postJson(base, '/api/keys/check', { provider: 'composio', apiKey: 'k' });
   assert.equal(limited.status, 429);
   assert.equal((await limited.json()).error.code, 'LIMIT_EXCEEDED');
 });

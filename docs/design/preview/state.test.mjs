@@ -21,7 +21,7 @@ test('a new workspace has no invented progress or connected accounts', () => {
   assert.equal(profile.brand, 'coffeenator');
   assert.equal(profile.companion, 'bean');
   assert.deepEqual(profile.achievements, []);
-  assert.ok(CONNECTORS.every((connector) => connector.status === 'soon'));
+  assert.ok(CONNECTORS.every((connector) => connector.status === 'key'), 'connectors only offer bring-your-own-key, nothing is pre-connected');
 });
 
 test('progress does not require personal information or a connector', () => {
@@ -364,32 +364,44 @@ test('network failures and timeouts surface as retryable errors, never success',
   assert.equal(unreadable.retryable, true);
 });
 
-test('composio state normalizes stored data and never trusts unknown fields', async () => {
-  const { normalizeComposio, maskKey } = await import('./state.mjs');
-  assert.deepEqual(normalizeComposio(null), { apiKey: '', status: 'unchecked', account: '', checkedAt: '' });
-  assert.deepEqual(normalizeComposio({ apiKey: 'ak_x', status: 'healthy', account: '2 connected account(s)', checkedAt: '2026-09-19T12:00:00.000Z', extra: 1 }), { apiKey: 'ak_x', status: 'healthy', account: '2 connected account(s)', checkedAt: '2026-09-19T12:00:00.000Z' });
-  assert.equal(normalizeComposio({ apiKey: 'k', status: 'hacked' }).status, 'unchecked');
-  assert.equal(normalizeComposio({ apiKey: 'x'.repeat(4097) }).apiKey, '');
+test('API key state keeps known providers only and migrates the legacy Composio record', async () => {
+  const { normalizeKeys, normalizeKeyEntry, maskKey, KEY_GUIDES, CONNECTORS: connectors, CONNECTOR_KEYS } = await import('./state.mjs');
+  assert.deepEqual(normalizeKeys(null), {});
+  const keys = normalizeKeys({ openai: { apiKey: 'sk-x', status: 'healthy', account: '1 model(s) available', checkedAt: '2026-09-19T12:00:00.000Z', extra: 1 }, aws: { apiKey: 'nope' }, github: { apiKey: '' } }, { apiKey: 'ak_legacy', status: 'healthy' });
+  assert.deepEqual(Object.keys(keys).sort(), ['composio', 'openai']);
+  assert.deepEqual(keys.openai, { apiKey: 'sk-x', status: 'healthy', account: '1 model(s) available', checkedAt: '2026-09-19T12:00:00.000Z' });
+  assert.equal(keys.composio.apiKey, 'ak_legacy');
+  assert.equal(normalizeKeys({ composio: { apiKey: 'ak_new' } }, { apiKey: 'ak_legacy' }).composio.apiKey, 'ak_new');
+  assert.equal(normalizeKeyEntry({ apiKey: 'k', status: 'hacked' }).status, 'unchecked');
+  assert.equal(normalizeKeyEntry({ apiKey: 'x'.repeat(4097) }), null);
+  assert.deepEqual(normalizeKeyEntry({ apiKey: 'k', toolkits: { gmail: 2, googledrive: '1', evil: 9 } }).toolkits, { gmail: 2, googlecalendar: 0, googledrive: 1 });
   assert.equal(maskKey('ak_abcdefgh1234'), '••••1234');
   assert.equal(maskKey('abc'), '••••');
+  for (const connector of connectors) {
+    assert.equal(connector.status, 'key', connector.id);
+    assert.ok(KEY_GUIDES[CONNECTOR_KEYS[connector.id]], `${connector.id} has a guide`);
+    assert.doesNotMatch(JSON.stringify(connector), /planned|future|coming soon/i, connector.id);
+  }
 });
 
-test('requestComposioCheck posts only the key and maps every outcome', async () => {
-  const { requestComposioCheck } = await import('./state.mjs');
+test('requestKeyCheck posts provider and key and maps every outcome', async () => {
+  const { requestKeyCheck } = await import('./state.mjs');
   const calls = [];
   const reply = (status, payload) => async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify(payload), { status }); };
-  const healthy = await requestComposioCheck('ak_key', { fetchImpl: reply(200, { ok: true, data: { provider: 'composio', healthy: true, account: '3 connected account(s)' } }) });
+  const healthy = await requestKeyCheck('composio', 'ak_key', { fetchImpl: reply(200, { ok: true, data: { provider: 'composio', healthy: true, account: '3 connected account(s)', toolkits: { gmail: 1, googlecalendar: 0, googledrive: 2 } } }) });
   assert.equal(healthy.status, 'healthy');
   assert.equal(healthy.account, '3 connected account(s)');
+  assert.deepEqual(healthy.toolkits, { gmail: 1, googlecalendar: 0, googledrive: 2 });
   assert.ok(Number.isFinite(Date.parse(healthy.checkedAt)));
-  assert.equal(calls[0].url, '/api/composio/check');
-  assert.deepEqual(JSON.parse(calls[0].init.body), { apiKey: 'ak_key' });
-  assert.equal((await requestComposioCheck('k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unauthorized' } }) })).status, 'unauthorized');
-  assert.equal((await requestComposioCheck('k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unreachable' } }) })).status, 'unreachable');
-  const limited = await requestComposioCheck('k', { fetchImpl: reply(429, { ok: false, error: { code: 'LIMIT_EXCEEDED', message: 'Too many requests. Please wait a moment and try again.' } }) });
+  assert.equal(calls[0].url, '/api/keys/check');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { provider: 'composio', apiKey: 'ak_key' });
+  assert.equal((await requestKeyCheck('openai', 'k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unauthorized' } }) })).status, 'unauthorized');
+  assert.equal((await requestKeyCheck('openai', 'k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unreachable' } }) })).status, 'unreachable');
+  const limited = await requestKeyCheck('github', 'k', { fetchImpl: reply(429, { ok: false, error: { code: 'LIMIT_EXCEEDED', message: 'Too many requests. Please wait a moment and try again.' } }) });
   assert.equal(limited.status, 'error');
   assert.match(limited.message, /Too many requests/);
-  const offline = await requestComposioCheck('k', { fetchImpl: async () => { throw new Error('offline'); } });
-  assert.equal(offline.status, 'error');
-  assert.equal((await requestComposioCheck('', { fetchImpl: async () => { throw new Error('must not call'); } })).status, 'error');
+  const neverCall = async () => { throw new Error('must not call'); };
+  assert.equal((await requestKeyCheck('github', 'k', { fetchImpl: neverCall })).status, 'error');
+  assert.equal((await requestKeyCheck('github', '', { fetchImpl: neverCall })).status, 'error');
+  assert.equal((await requestKeyCheck('google', 'k', { fetchImpl: neverCall })).status, 'error');
 });

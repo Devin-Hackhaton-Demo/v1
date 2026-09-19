@@ -41,14 +41,15 @@ export const PROACTIVITY = [
 ];
 
 export const CONNECTORS = [
-  { id: 'gmail', name: 'Gmail', category: 'Google', featured: true, status: 'soon', description: 'Less inbox noise. More clarity.', benefit: 'Summarize selected emails and prepare thoughtful replies with the right context.', permission: 'Read selected emails. Sending a message will require separate permission and approval.', icon: 'gmail' },
-  { id: 'calendar', name: 'Google Calendar', category: 'Google', featured: true, status: 'soon', description: 'Make room for what matters.', benefit: 'Plan your priorities around the events already in your day.', permission: 'Read events in your chosen calendars. Creating or changing an event will require approval.', icon: 'calendar' },
-  { id: 'drive', name: 'Google Drive', category: 'Google', featured: true, status: 'soon', description: 'Your files, part of the conversation.', benefit: 'Work with the documents you choose, without uploading them again each time.', permission: 'Read approved files. The real Google authorization screen will show the exact access requested.', icon: 'drive' },
-  { id: 'claude', name: 'Claude', category: 'AI tools', status: 'soon', description: 'Bring along what it knows about you.', benefit: 'A direct connection is planned. You can already try importing a selected text export.', permission: 'No automatic access to chat history. Only the export you choose is read locally.', icon: 'claude' },
-  { id: 'chatgpt', name: 'ChatGPT', category: 'AI tools', status: 'soon', description: 'A new chapter, not a blank page.', benefit: 'A direct connection is planned. A selected text memory export can already be imported locally.', permission: 'Your full history is not automatically available. A future connection will still need explicit authorization.', icon: 'chatgpt' },
-  { id: 'notion', name: 'Notion', category: 'Work', status: 'soon', description: 'Pages and project notes', benefit: 'Work with pages you explicitly choose to share.', permission: 'Access to selected pages only. Writing or changing content will require separate permission.', icon: 'notion' },
-  { id: 'github', name: 'GitHub', category: 'Development', status: 'soon', description: 'Repositories and issues', benefit: 'Bring approved project context into your workflow. The repository currently documents this integration as a plan, not a live implementation.', permission: 'Selected repositories only. Creating an issue requires a reviewed payload and explicit approval.', icon: 'github' },
-  { id: 'supabase', name: 'Supabase', category: 'Development', status: 'soon', description: 'Project and database context', benefit: 'Access explicitly approved project resources through a future integration.', permission: 'No database or project access is granted by the app yet. Credentials must remain on the server.', icon: 'supabase' },
+  { id: 'composio', name: 'Composio', category: 'Development', featured: true, status: 'key', description: 'One key for many apps.', benefit: 'Connect the apps in your Composio project, including Gmail, Google Calendar and Google Drive.', permission: 'The key is kept in this browser and sent to the server only to run a check.', icon: 'composio' },
+  { id: 'gmail', name: 'Gmail', category: 'Google', featured: true, status: 'key', description: 'Less inbox noise. More clarity.', benefit: 'Summarize selected emails and prepare thoughtful replies with the right context.', permission: 'Read selected emails. Sending a message will require separate permission and approval.', icon: 'gmail' },
+  { id: 'calendar', name: 'Google Calendar', category: 'Google', featured: true, status: 'key', description: 'Make room for what matters.', benefit: 'Plan your priorities around the events already in your day.', permission: 'Read events in your chosen calendars. Creating or changing an event will require approval.', icon: 'calendar' },
+  { id: 'drive', name: 'Google Drive', category: 'Google', featured: true, status: 'key', description: 'Your files, part of the conversation.', benefit: 'Work with the documents you choose, without uploading them again each time.', permission: 'Read approved files. The real Google authorization screen will show the exact access requested.', icon: 'drive' },
+  { id: 'claude', name: 'Claude', category: 'AI tools', status: 'key', description: 'Bring along what it knows about you.', benefit: 'Connect your Anthropic API key. You can also import a selected text export of your chats.', permission: 'No automatic access to chat history. Only the export you choose is read locally.', icon: 'claude' },
+  { id: 'chatgpt', name: 'ChatGPT', category: 'AI tools', status: 'key', description: 'A new chapter, not a blank page.', benefit: 'Connect your OpenAI API key. You can also import a selected text memory export locally.', permission: 'Your chat history is not accessible with an API key. The key is kept in this browser and sent to the server only to run a check.', icon: 'chatgpt' },
+  { id: 'notion', name: 'Notion', category: 'Work', status: 'key', description: 'Pages and project notes', benefit: 'Work with pages you explicitly choose to share.', permission: 'Access to selected pages only. Writing or changing content will require separate permission.', icon: 'notion' },
+  { id: 'github', name: 'GitHub', category: 'Development', status: 'key', description: 'Repositories and issues', benefit: 'Bring approved repository context into your workflow with your own token.', permission: 'Selected repositories only. Creating an issue requires a reviewed payload and explicit approval.', icon: 'github' },
+  { id: 'supabase', name: 'Supabase', category: 'Development', status: 'key', description: 'Project and database context', benefit: 'Access your projects with your own personal access token.', permission: 'The token is kept in this browser and sent to the server only to run a check.', icon: 'supabase' },
 ];
 
 const MILESTONES = ['style', 'profile', 'companion', 'import', 'note', 'export'];
@@ -366,31 +367,95 @@ export const EXPORT_GUIDES = {
   },
 };
 
-// Composio API key the user adds on the Connectors page. The preview has no
-// accounts, so the key lives only in this browser's localStorage; the server
-// uses it once per check and never stores it.
-export const COMPOSIO_KEY = 'coffeenator-preview-composio-v1';
-const COMPOSIO_STATUSES = ['unchecked', 'healthy', 'unauthorized', 'unreachable'];
-const MAX_COMPOSIO_KEY_CHARS = 4096;
+// API keys the user adds on the Connectors page. The preview has no accounts,
+// so keys live only in this browser's localStorage; the server uses a key once
+// per check (POST /api/keys/check) and never stores it.
+export const KEYS_KEY = 'coffeenator-preview-keys-v1';
+export const LEGACY_COMPOSIO_KEY = 'coffeenator-preview-composio-v1';
+export const KEY_PROVIDERS = ['composio', 'anthropic', 'openai', 'notion', 'github', 'supabase'];
+export const CONNECTOR_KEYS = { composio: 'composio', gmail: 'google', calendar: 'google', drive: 'google', claude: 'anthropic', chatgpt: 'openai', notion: 'notion', github: 'github', supabase: 'supabase' };
+export const GOOGLE_TOOLKITS = { gmail: 'gmail', calendar: 'googlecalendar', drive: 'googledrive' };
+const KEY_STATUSES = ['unchecked', 'healthy', 'unauthorized', 'unreachable'];
+const MAX_KEY_CHARS = 4096;
 
-export function normalizeComposio(input) {
+export const KEY_GUIDES = {
+  composio: {
+    name: 'Composio', label: 'Composio API key', url: 'https://platform.composio.dev',
+    steps: ['Sign in at platform.composio.dev.', 'Open Settings → API Keys and create a new key.', 'Copy the key and paste it below.'],
+    note: 'Composio also connects Gmail, Google Calendar and Google Drive for you.',
+  },
+  google: {
+    name: 'Google via Composio', url: 'https://platform.composio.dev',
+    steps: ['Add your Composio API key first (Composio card).', 'In the Composio dashboard, open the toolkit (Gmail, Google Calendar or Google Drive) and connect your Google account.', 'Come back here and press Check on your Composio key.'],
+    note: 'Google does not issue personal API keys for mail, calendar or files. The app shows the Google accounts that are active in your Composio project.',
+  },
+  anthropic: {
+    name: 'Claude (Anthropic API)', label: 'Anthropic API key', url: 'https://console.anthropic.com/settings/keys',
+    steps: ['Sign in at console.anthropic.com.', 'Open Settings → API Keys and choose Create Key.', 'Copy the key (starts with sk-ant-) and paste it below.'],
+    note: 'An API key does not give access to your claude.ai chat history. Use Import on the Memory page for that.',
+  },
+  openai: {
+    name: 'ChatGPT (OpenAI API)', label: 'OpenAI API key', url: 'https://platform.openai.com/api-keys',
+    steps: ['Sign in at platform.openai.com.', 'Open API keys and choose Create new secret key.', 'Copy the key (starts with sk-) and paste it below.'],
+    note: 'An API key does not give access to your ChatGPT chat history. Use Import on the Memory page for that.',
+  },
+  notion: {
+    name: 'Notion', label: 'Internal integration secret', url: 'https://www.notion.so/profile/integrations',
+    steps: ['Open notion.so/profile/integrations and create a new internal integration.', 'Copy the Internal Integration Secret and paste it below.', 'In Notion, open each page you want to share → ••• → Connections → add your integration.'],
+    note: 'The integration only sees pages you explicitly connect.',
+  },
+  github: {
+    name: 'GitHub', label: 'Fine-grained personal access token', url: 'https://github.com/settings/personal-access-tokens/new',
+    steps: ['Open GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token.', 'Select only the repositories you want and read-only permissions.', 'Generate the token and paste it below.'],
+    note: 'Prefer read-only, repository-scoped tokens with an expiry date.',
+  },
+  supabase: {
+    name: 'Supabase', label: 'Personal access token', url: 'https://supabase.com/dashboard/account/tokens',
+    steps: ['Open supabase.com/dashboard/account/tokens.', 'Choose Generate new token and give it a name.', 'Copy the token and paste it below.'],
+    note: 'A personal access token can manage every project in your Supabase account. Revoke it when you no longer need it.',
+  },
+};
+
+export function normalizeKeyEntry(input) {
   const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
-  const apiKey = typeof value.apiKey === 'string' && value.apiKey.length <= MAX_COMPOSIO_KEY_CHARS ? value.apiKey.trim() : '';
-  return {
+  const apiKey = typeof value.apiKey === 'string' && value.apiKey.length <= MAX_KEY_CHARS ? value.apiKey.trim() : '';
+  if (!apiKey) return null;
+  const entry = {
     apiKey,
-    status: apiKey ? pick(value.status, COMPOSIO_STATUSES, 'unchecked') : 'unchecked',
-    account: apiKey && typeof value.account === 'string' ? value.account.slice(0, 120) : '',
-    checkedAt: apiKey && typeof value.checkedAt === 'string' && Number.isFinite(Date.parse(value.checkedAt)) ? value.checkedAt : '',
+    status: pick(value.status, KEY_STATUSES, 'unchecked'),
+    account: typeof value.account === 'string' ? value.account.slice(0, 120) : '',
+    checkedAt: typeof value.checkedAt === 'string' && Number.isFinite(Date.parse(value.checkedAt)) ? value.checkedAt : '',
   };
+  if (value.toolkits && typeof value.toolkits === 'object') {
+    entry.toolkits = Object.fromEntries(Object.values(GOOGLE_TOOLKITS).map((slug) => [slug, Math.max(0, Math.floor(Number(value.toolkits[slug]) || 0))]));
+  }
+  return entry;
+}
+
+// Accepts the stored map plus the legacy single Composio record and returns
+// { provider: entry } for known providers only.
+export function normalizeKeys(input, legacyComposio = null) {
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const keys = {};
+  for (const provider of KEY_PROVIDERS) {
+    const entry = normalizeKeyEntry(source[provider]);
+    if (entry) keys[provider] = entry;
+  }
+  if (!keys.composio) {
+    const legacy = normalizeKeyEntry(legacyComposio);
+    if (legacy) keys.composio = legacy;
+  }
+  return keys;
 }
 
 export const maskKey = (key) => `••••${typeof key === 'string' && key.length > 8 ? key.slice(-4) : ''}`;
 
-export async function requestComposioCheck(apiKey, { fetchImpl = globalThis.fetch } = {}) {
+export async function requestKeyCheck(provider, apiKey, { fetchImpl = globalThis.fetch } = {}) {
   const key = typeof apiKey === 'string' ? apiKey.trim() : '';
-  if (!key || key.length > MAX_COMPOSIO_KEY_CHARS) return { status: 'error', message: 'Enter a Composio API key.' };
+  if (!KEY_PROVIDERS.includes(provider)) return { status: 'error', message: 'This connector does not take an API key.' };
+  if (!key || key.length > MAX_KEY_CHARS) return { status: 'error', message: 'Enter an API key.' };
   let response;
-  try { response = await fetchImpl('/api/composio/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: key }) }); }
+  try { response = await fetchImpl('/api/keys/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider, apiKey: key }) }); }
   catch { return { status: 'error', message: 'Could not reach the server. Check your connection and try again.' }; }
   let payload = null;
   try { payload = await response.json(); } catch {}
@@ -399,6 +464,10 @@ export async function requestComposioCheck(apiKey, { fetchImpl = globalThis.fetc
   }
   const data = payload.data || {};
   const checkedAt = new Date().toISOString();
-  if (data.healthy === true) return { status: 'healthy', account: typeof data.account === 'string' ? data.account.slice(0, 120) : '', checkedAt };
+  if (data.healthy === true) {
+    const result = { status: 'healthy', account: typeof data.account === 'string' ? data.account.slice(0, 120) : '', checkedAt };
+    if (data.toolkits && typeof data.toolkits === 'object') result.toolkits = normalizeKeyEntry({ apiKey: 'x', toolkits: data.toolkits }).toolkits;
+    return result;
+  }
   return { status: data.reason === 'unauthorized' ? 'unauthorized' : 'unreachable', account: '', checkedAt };
 }
