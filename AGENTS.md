@@ -124,3 +124,25 @@ Details and exact signatures: PROJECT_CONTEXT.md section 15. New rules:
 - Host/Origin validation, server-side request ids, request size limits and
   sanitized errors/logs are mandatory. Never log payloads, URL params, tokens,
   cookies or raw upstream errors.
+
+## Design preview workspace (merged from design/personal-workspace-preview, 2026-09-19)
+
+- The hackathon and the entire product are English-first. All UI copy, validation, accessibility labels, metadata, default preferences, sample data, and branding explanations must be in English, even when the user speaks Hungarian in chat.
+- Coffeenator is the user's primary brand direction: a personal AI home with an optional coffee companion, gentle brewing metaphors, and reduced-motion-aware animations. It is not a coffee-ordering application.
+- The only primary navigation items are Chat, Connectors, and Memory. Chat is the default landing screen. Profile, appearance, companions, onboarding, brand concepts, and AI subscription tracking are secondary dialogs or tabs, never extra main navigation items.
+- Keep everyday screens visual and concise. Use explicit verbs such as Send, Connect, Import, Export, and Add note. Put explanations behind keyboard-accessible info controls that also open on tap.
+- Composio ACTIVE means its connection flow completed, not that credentials were health-checked or content was indexed. Connection, health, and sync are independent states. Provider account payloads can contain credentials: only allowlisted, sanitized metadata may reach the UI. Sample records must be explicitly labelled and must never be persisted as live connections.
+- The remote GitHub repo inspected on 2026-09-19 contains only .gitignore, README.md, and PROJECT_CONTEXT.md on main, with no published implementation branch or PR. Do not label integrations implemented on that evidence.
+- Subscription costs, capabilities, device versions, and check dates in the local AI stack are user-reported. Never infer installed versions, paid plans, pricing, or guaranteed savings. Meeting notes and system-wide dictation are distinct capabilities.
+- Privacy badges must describe actual behavior, not promise 100% security, production no-training terms, encryption, or inaccessible data without implementation and policy evidence.
+
+- The `design/personal-workspace-preview` branch is isolated from the parallel backend sessions. Its implementation is under `docs/design/preview/`.
+- The existing `PROJECT_CONTEXT.md` and `docs/design/README.md` describe the separate server-rendered backend MVP. The user subsequently approved a standalone, interactive product-design preview; do not change backend scope, auth, contracts, root manifests, or the original design tokens to implement this preview.
+- This preview has no runtime dependencies and uses browser ES modules and Node.js built-ins. Run from the repository root with `node docs/design/preview/server.mjs`. It binds to loopback, on port 4173 by default; use `PORT=4174` if necessary.
+- Run checks with `node --test docs/design/preview/*.test.mjs`, `node --check docs/design/preview/app.mjs`, and `git diff --check`.
+- Google login, Google connectors, live AI responses, and backend synchronization are not implemented. Never simulate successful authentication or connected-account states. Keep upcoming capabilities explicitly labelled.
+- Profile preferences and a resized avatar are stored in localStorage. Imported context is only in sessionStorage for the current tab. No user content is sent to the preview server or an AI provider. Keep import review, size/type validation, explicit consent, and source provenance intact.
+- All in-app graphics are served locally; there are no external font, image, analytics, or tracking requests. Google product PNGs come from gstatic, Composio marks from https://brand.composio.dev/logo (preserve black/white variants), GitHub/Supabase/Claude marks from the CC0 Simple Icons repository, and the ChatGPT mark from Wikimedia Commons. Provider trademarks still belong to their owners; these marks identify tools, not partnerships.
+- Import tutorials were checked against https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data and https://support.claude.com/en/articles/9450526-export-your-claude-data on 2026-09-19. Quick memory summaries may be partial. Full account exports must be extracted and reviewed; this preview does not accept ZIP, HTML, or PDF and does not migrate accounts or subscriptions.
+- Before sharing the preview, check desktop and mobile layouts, dark/light/system modes, keyboard navigation, dialog dismissal, reduced motion, avatar upload, context import/export, and rejection of invalid files.
+- Brand names are provisional design directions, not cleared trademarks or confirmed available domains.

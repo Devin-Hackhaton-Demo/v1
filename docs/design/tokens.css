@@ -1,0 +1,152 @@
+/*
+ * Design tokens — v0.1
+ * Framework-független CSS custom property-k a szerveroldali oldalakhoz.
+ * Forrás és magyarázat: docs/design/README.md
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Szín — semleges */
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eef0f4;
+  --color-border: #d5d9e2;
+  --color-text: #161a22;
+  --color-text-muted: #5b6370;
+
+  /* Szín — szemantikus */
+  --color-primary: #1f4fd8;
+  --color-primary-bg: #e6ecfb;
+  --color-primary-fg: #173c9f;
+
+  --color-success: #1b7f4a;
+  --color-success-bg: #e3f4ea;
+  --color-success-fg: #135c36;
+
+  --color-warning: #b26a00;
+  --color-warning-bg: #fdf1dc;
+  --color-warning-fg: #7a4900;
+
+  --color-danger: #b3261e;
+  --color-danger-bg: #fbe5e3;
+  --color-danger-fg: #8a1c16;
+
+  --color-info: #0b6e8a;
+  --color-info-bg: #e0f2f7;
+  --color-info-fg: #085164;
+
+  --color-neutral: #5b6370;
+  --color-neutral-bg: #eef0f4;
+  --color-neutral-fg: #3c424d;
+
+  /* Tipográfia */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --leading-xs: 1rem;
+  --text-sm: 0.875rem;
+  --leading-sm: 1.25rem;
+  --text-md: 1rem;
+  --leading-md: 1.5rem;
+  --text-lg: 1.25rem;
+  --leading-lg: 1.75rem;
+  --text-xl: 1.75rem;
+  --leading-xl: 2.25rem;
+
+  /* Térköz */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  /* Sugár, árnyék, elrendezés */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --shadow-card: 0 1px 2px rgba(22, 26, 34, 0.06), 0 1px 3px rgba(22, 26, 34, 0.1);
+  --content-max: 720px;
+  --touch-min: 44px;
+
+  /* Fókusz */
+  --focus-ring: 2px solid var(--color-primary);
+  --focus-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0f1115;
+    --color-surface: #181b22;
+    --color-surface-muted: #20242d;
+    --color-border: #2e3340;
+    --color-text: #e8eaef;
+    --color-text-muted: #9aa3b2;
+
+    --color-primary: #6c8eff;
+    --color-primary-bg: #1a2447;
+    --color-primary-fg: #b9c8ff;
+
+    --color-success: #4cc38a;
+    --color-success-bg: #12301f;
+    --color-success-fg: #9be3bf;
+
+    --color-warning: #f2b94b;
+    --color-warning-bg: #3a2a08;
+    --color-warning-fg: #f7d48f;
+
+    --color-danger: #f2837b;
+    --color-danger-bg: #3d1512;
+    --color-danger-fg: #f8b5b0;
+
+    --color-info: #5ac8e8;
+    --color-info-bg: #0c2a33;
+    --color-info-fg: #a3e2f2;
+
+    --color-neutral: #9aa3b2;
+    --color-neutral-bg: #20242d;
+    --color-neutral-fg: #c4cad4;
+
+    --shadow-card: none;
+  }
+}
+
+/* Állapot → szemantikus szín megfeleltetés (README 5. fejezet) */
+[data-state="awaiting_approval"],
+[data-state="outcome_unknown"] {
+  --state-color: var(--color-warning);
+  --state-bg: var(--color-warning-bg);
+  --state-fg: var(--color-warning-fg);
+}
+
+[data-state="scheduled"],
+[data-state="queued"],
+[data-state="running"],
+[data-state="executing"] {
+  --state-color: var(--color-info);
+  --state-bg: var(--color-info-bg);
+  --state-fg: var(--color-info-fg);
+}
+
+[data-state="succeeded"],
+[data-state="done"] {
+  --state-color: var(--color-success);
+  --state-bg: var(--color-success-bg);
+  --state-fg: var(--color-success-fg);
+}
+
+[data-state="failed"],
+[data-state="blocked"] {
+  --state-color: var(--color-danger);
+  --state-bg: var(--color-danger-bg);
+  --state-fg: var(--color-danger-fg);
+}
+
+[data-state="cancelled"],
+[data-state="open"] {
+  --state-color: var(--color-neutral);
+  --state-bg: var(--color-neutral-bg);
+  --state-fg: var(--color-neutral-fg);
+}

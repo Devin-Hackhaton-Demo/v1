@@ -1,0 +1,535 @@
+import {
+  STORAGE_KEY, SESSION_KEY, STACK_KEY, THEMES, BRANDS, COMPANIONS, ROLES, INTERESTS,
+  PROVIDERS, PROACTIVITY, CONNECTORS, CAPABILITIES, EXPORT_GUIDES, MAX_CONTEXT_BYTES,
+  createProfile, normalizeProfile, serializeProfile, onboardingProgress, earnMilestone,
+  validateContextFile, escapeHtml as esc, addSource, buildExport, normalizeSources,
+  sourceCoverage, sampleConnections, normalizeStack, stackSummary,
+} from './state.mjs';
+import { icon, brandMark, serviceMark, companionArt } from './art.mjs';
+
+const app = document.querySelector('#app');
+const modal = document.querySelector('#modal');
+const toastElement = document.querySelector('#toast');
+const systemTheme = matchMedia('(prefers-color-scheme: dark)');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const NAV = [
+  { id: 'chat', label: 'Chat', icon: 'chat' },
+  { id: 'connectors', label: 'Connectors', icon: 'plug' },
+  { id: 'memory', label: 'Memory', icon: 'memory' },
+];
+const HELP = {
+  preview: ['About this preview', 'Themes, profiles, text imports and manual subscription tracking work locally. Live AI, Google sign-in, Composio authorization and cloud sync are not connected yet.'],
+  ai: ['AI connection', 'An AI provider must be configured on the server before messages can be sent. Never paste API keys into a chat, import, or browser setting.'],
+  privacy: ['Local data', 'This preview does not send your content to a server or an AI provider, so it does not train a model on it. Preferences and AI tracking stay on this device. Imported text stays in this tab’s session: export a copy before closing, because it is not synced or backed up. This is not a production security guarantee.'],
+  composio: ['Composio setup', 'The connector registry is prepared for Composio. A server-side API key, auth configurations, user authentication and callback verification are still required. No live accounts are connected.'],
+  connection: ['Connection status', 'Connected means an authorization flow completed. It does not prove the credentials still work. The health check and sync status are separate.'],
+  health: ['Connection health', 'Healthy requires an actual successful check and a timestamp from the backend. An ACTIVE Composio account alone is not health-check evidence.'],
+  sync: ['Sync status', 'Synced means an explicit import or indexing job finished. OAuth authorization is not synchronization. On-demand tools do not necessarily need a persistent copy of your data.'],
+  sample: ['Sample records', 'These are fictional examples to demonstrate connected, healthy, expired and synced states. They are never stored as real connections or included in your memory.'],
+  coverage: ['Source coverage', 'The bar counts optional source types you have added: ChatGPT, Claude, files and notes. It does not measure intelligence, training, completeness, or how well an AI knows you. You do not need every source type.'],
+  refresh: ['Context freshness', 'A review is suggested after 21 days without a newer import from that source. This uses the import date, not your activity in the original AI app. Nothing expires or is refreshed automatically.'],
+  stack: ['Manual AI tracking', 'Plans, costs, capabilities, device versions and check dates are self-reported. This preview cannot inspect your subscriptions, installed apps or billing. Automatic updates are planned.'],
+  overlap: ['Potential overlap', 'A shared capability is a reason to compare tools, not proof of waste or guaranteed savings. Meeting notes and system-wide dictation are different capabilities. No subscription is changed automatically.'],
+  imports: ['Supported imports', 'Select UTF-8 .txt, .md or .json files up to 1 MiB each, or paste a reviewed excerpt. Up to five sources fit in this preview. Unpack archives first; ZIP, HTML, PDF and images are not supported.'],
+};
+let storageWarning = false;
+function readStorage(kind, key) {
+  try { return JSON.parse(window[kind].getItem(key) || 'null'); }
+  catch { storageWarning = true; return null; }
+}
+let profile = normalizeProfile(readStorage('localStorage', STORAGE_KEY));
+let profileDraft = structuredClone(profile);
+let sources = normalizeSources(readStorage('sessionStorage', SESSION_KEY));
+let stack = normalizeStack(readStorage('localStorage', STACK_KEY));
+let page = getRoute();
+let modalState = null;
+let modalHistory = [];
+let previousFocus = null;
+let previousFocusKey = null;
+let toastTimer;
+let brewTimer;
+let readGeneration = 0;
+let avatarGeneration = 0;
+let helpCounter = 0;
+let connectorTab = 'connections';
+let showSamples = false;
+let connectorSearch = '';
+let connectorFilter = 'All';
+let composerDraft = '';
+let messages = [];
+let brewing = false;
+const brand = () => BRANDS.find(({ id }) => id === profile.brand) || BRANDS[0];
+const pet = () => COMPANIONS.find(({ id }) => id === profile.companion) || COMPANIONS[0];
+const mark = (name) => serviceMark(name, document.documentElement.dataset.resolved === 'dark');
+const selected = (value) => value ? ' selected' : '';
+const byteLabel = (size) => size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KB`;
+const dateLabel = (value) => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(value)) : '—';
+const money = (value, currency) => new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 2 }).format(value);
+const sampleRows = () => showSamples ? sampleConnections() : [];
+const connectorFor = (slug) => CONNECTORS.find(({ id }) => id === ({ googlecalendar: 'calendar', googledrive: 'drive' })[slug] || id === slug);
+
+function getRoute() {
+  const route = location.hash.slice(1);
+  return route === 'connections' ? 'connectors' : NAV.some(({ id }) => id === route) ? route : 'chat';
+}
+
+function help(key) {
+  const [label, description] = HELP[key];
+  const id = `tip-${++helpCounter}`;
+  return `<span class="help-wrap"><button class="icon-button info-button" data-action="help" data-value="${key}" aria-label="${esc(label)}" aria-describedby="${id}">${icon('info')}</button><span class="tooltip" role="tooltip" id="${id}">${esc(description)}</span></span>`;
+}
+
+function avatar(large = false) {
+  return `<span class="avatar${large ? ' large' : ''}">${profile.avatar ? `<img src="${esc(profile.avatar)}" alt="Your profile photo">` : profile.name ? esc(profile.name[0].toUpperCase()) : icon('user')}</span>`;
+}
+
+function applyAppearance() {
+  const root = document.documentElement;
+  root.dataset.theme = profile.theme;
+  root.dataset.appearance = profile.appearance;
+  root.dataset.resolved = profile.appearance === 'system' ? systemTheme.matches ? 'dark' : 'light' : profile.appearance;
+  document.title = `${brand().name} · ${NAV.find(({ id }) => id === page)?.label || 'Chat'}`;
+  document.querySelector('meta[name="theme-color"]').content = root.dataset.resolved === 'dark' ? '#1a1918' : '#fbfaf8';
+}
+
+function saveProfile(patch, milestone) {
+  let current = profile;
+  try { const stored = localStorage.getItem(STORAGE_KEY); if (stored) current = normalizeProfile(JSON.parse(stored)); } catch {}
+  profile = normalizeProfile({ ...current, ...patch });
+  if (milestone) profile = earnMilestone(profile, milestone);
+  try { localStorage.setItem(STORAGE_KEY, serializeProfile(profile)); }
+  catch { notify('Browser storage is unavailable. These settings only last for this view.', 'info'); }
+  applyAppearance();
+}
+
+function saveSources(next) {
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(next)); }
+  catch { throw new Error('Not enough browser storage. Use a smaller file or remove a source.'); }
+  sources = next;
+}
+
+function saveStack(next) {
+  if (next.length > 30) throw new Error('This preview supports up to 30 AI tools. Remove an entry before adding another.');
+  const clean = normalizeStack(next);
+  try { localStorage.setItem(STACK_KEY, JSON.stringify(clean)); }
+  catch { throw new Error('Browser storage is unavailable. The entry was not saved.'); }
+  stack = clean;
+}
+
+function notify(message, glyph = 'check') {
+  clearTimeout(toastTimer);
+  toastElement.innerHTML = `${icon(glyph)}<span>${esc(message)}</span>`;
+  toastElement.classList.add('visible');
+  toastTimer = setTimeout(() => toastElement.classList.remove('visible'), 4000);
+}
+
+function celebrate(message) {
+  notify(message, 'spark');
+  document.querySelectorAll('.companion-stage, .chat-companion').forEach((element) => {
+    element.classList.remove('celebrating');
+    requestAnimationFrame(() => element.classList.add('celebrating'));
+  });
+}
+
+function preserveFocus(root, paint) {
+  const active = document.activeElement;
+  const focused = root.contains(active);
+  const id = focused ? active.id : '';
+  const action = focused ? active.dataset?.action : '';
+  const value = focused ? active.dataset?.value : '';
+  const caret = focused && ['text', 'search'].includes(active.type) ? active.selectionStart : null;
+  const expanded = new Set([...root.querySelectorAll('details[open]')].map((element) => element.querySelector('summary')?.textContent));
+  paint();
+  root.querySelectorAll('details').forEach((element) => { if (expanded.has(element.querySelector('summary')?.textContent)) element.open = true; });
+  let target = id ? root.querySelector(`#${CSS.escape(id)}`) : null;
+  if (!target && action) target = [...root.querySelectorAll('[data-action]')].find((element) => element.dataset.action === action && element.dataset.value === value);
+  if (target) { target.focus({ preventScroll: true }); if (caret !== null && target.setSelectionRange) target.setSelectionRange(caret, caret); }
+}
+
+function render() {
+  applyAppearance();
+  preserveFocus(app, () => {
+    app.innerHTML = `<div class="app-shell"><aside class="sidebar" aria-label="Workspace navigation">
+      <a href="#chat" class="brand" aria-label="${esc(brand().name)} chat"><span class="brand-symbol">${brandMark(profile.brand)}</span><span class="wordmark">${esc(brand().name)}</span></a>
+      <nav class="primary-nav" aria-label="Main navigation">${NAV.map((item) => `<a href="#${item.id}" class="nav-item${page === item.id ? ' active' : ''}" ${page === item.id ? 'aria-current="page"' : ''} aria-label="${item.label}">${icon(item.icon)}<span>${item.label}</span>${item.id === 'memory' && sources.length ? `<span class="nav-count">${sources.length}</span>` : ''}</a>`).join('')}</nav>
+      <div class="sidebar-bottom"><button class="model-status" data-action="help" data-value="ai"><span class="status-dot"></span><span>AI setup pending</span>${icon('chevron')}</button><button class="account-button" data-action="settings" aria-label="Open profile and settings">${avatar()}<span><strong>${esc(profile.name || 'Your profile')}</strong><small>Settings</small></span>${icon('sliders')}</button></div>
+      </aside><div class="main-shell"><header class="topbar"><a href="#chat" class="brand mobile-brand"><span class="brand-symbol">${brandMark(profile.brand)}</span><span class="wordmark">${esc(brand().name)}</span></a><span class="page-label">${NAV.find(({ id }) => id === page).label}</span><div class="top-actions"><button class="preview-label" data-action="help" data-value="preview">Preview</button><button class="icon-button" data-action="appearance" aria-label="Appearance">${icon(document.documentElement.dataset.resolved === 'dark' ? 'moon' : 'sun')}</button><button class="icon-button mobile-profile" data-action="settings" aria-label="Profile and settings">${avatar()}</button></div></header>
+      <main class="content ${page === 'chat' ? 'chat-content' : ''}" id="main" tabindex="-1" data-page="${page}">${({ chat: chatPage, connectors: connectorsPage, memory: memoryPage })[page]()}</main></div>
+      <nav class="mobile-nav" aria-label="Mobile navigation">${NAV.map((item) => `<a href="#${item.id}" class="${page === item.id ? 'active' : ''}" ${page === item.id ? 'aria-current="page"' : ''}>${icon(item.icon)}<span>${item.label}</span></a>`).join('')}</nav></div>`;
+  });
+}
+
+function chatPage() {
+  return `<div class="page chat-page${messages.length ? ' has-messages' : ''}${brewing ? ' is-brewing' : ''}"><div class="chat-tools"><button class="text-button" data-action="new-chat">${icon('plus')}New chat</button><div class="chat-tools-right">${onboardingProgress(profile).completed < 3 ? '<button class="text-button" data-action="onboarding">Personalize</button>' : ''}<button class="icon-button" data-action="animation" aria-label="${brewing ? 'Stop animation preview' : 'Preview brewing animation'}" title="Animation preview — not an AI request">${icon(brewing ? 'stop' : 'play')}</button></div></div>
+      <div class="chat-center">${messages.length ? `<div class="messages">${messages.map((message) => `<div class="message user"><span class="message-caption">Draft · not sent</span><p>${esc(message)}</p></div>`).join('')}<div class="pending-reply">${icon('plug')}<span>Connect an AI provider to send messages.</span><button class="text-button" data-action="help" data-value="ai">Setup</button></div><button class="text-button save-idea" data-action="save-chat-note">${icon('memory')}Save draft to memory</button></div>` : `<div class="chat-intro"><button class="chat-companion" data-action="companion" aria-label="Choose your companion">${companionArt(profile.companion, profile.accessory)}</button><p class="greeting">${profile.name ? `Hi, ${esc(profile.name)}.` : 'Your space. Your pace.'}</p><h1>What can I help with?</h1></div>`}
+      <div class="composer-window${brewing ? ' brewing' : ''}"><div class="composer-aura"></div><form id="chat-form" class="composer"><label class="sr-only" for="chat-input">Your message</label><textarea id="chat-input" rows="3" maxlength="2000" placeholder="Ask a question or give me a task…">${esc(composerDraft)}</textarea><div class="composer-bottom"><div class="composer-actions"><button type="button" class="icon-button" data-action="import" aria-label="Attach context" title="Attach context">${icon('plus')}</button><a class="context-chip" href="#memory">${icon('memory')}<span>Memory</span><strong>${sources.length}</strong></a></div><button class="button send-button" type="submit">Send ${icon('arrow')}</button></div></form></div>
+      <div class="composer-caption"><span>${brewing ? '<span class="brewing-dot"></span>Animation preview · no AI request' : 'AI not connected'}</span>${help('ai')}</div>
+      ${messages.length ? '' : `<div class="suggestions">${[{ id: 'gmail', label: 'Summarize my emails', prompt: 'Summarize my important emails and suggest the next steps.' }, { id: 'plug', label: 'Find useful connectors', prompt: 'Which connectors would help with my work and interests?' }, { id: 'calendar', label: 'Create a daily brief', prompt: 'Help me create a concise daily brief with priorities and next steps.' }].map((item) => `<button class="suggestion" data-action="suggestion" data-value="${item.prompt}">${['gmail', 'calendar'].includes(item.id) ? mark(item.id) : icon(item.id)}<span>${item.label}</span>${icon('arrow')}</button>`).join('')}</div>`}</div>
+      <div class="quiet-footer"><span>${icon('lock')}Local preview</span>${help('privacy')}</div></div>`;
+}
+
+function statePill(label, tone = 'neutral', glyph = '') {
+  return `<span class="state-pill ${tone}">${glyph ? icon(glyph) : '<span class="status-dot"></span>'}${esc(label)}</span>`;
+}
+
+function connectionPresentation(record) {
+  const connection = ({ ACTIVE: ['Connected', 'success'], EXPIRED: ['Reconnect', 'warning'], FAILED: ['Failed', 'danger'], INACTIVE: ['Paused', 'neutral'], INITIALIZING: ['Connecting', 'info'], INITIATED: ['Awaiting sign-in', 'info'] })[record.status] || ['Unknown', 'neutral'];
+  const health = ({ healthy: ['Healthy', 'success'], error: ['Needs attention', 'warning'], unknown: ['Not checked', 'neutral'] })[record.health];
+  const sync = ({ synced: ['Synced', 'success'], syncing: ['Syncing', 'info'], error: ['Sync failed', 'danger'], not_supported: ['On demand', 'neutral'], not_synced: ['Not synced', 'neutral'] })[record.sync];
+  return { connection, health, sync };
+}
+
+function connectorsPage() {
+  return `<div class="page"><div class="page-heading"><h1>Connectors</h1><div class="provider-label">${mark('composio')}<span>Composio</span>${statePill('Setup pending')}${help('composio')}</div></div><div class="section-tabs" role="group" aria-label="Connector view"><button class="section-tab${selected(connectorTab === 'connections')}" data-action="connector-tab" data-value="connections" aria-pressed="${connectorTab === 'connections'}">${icon('plug')}Connections</button><button class="section-tab${selected(connectorTab === 'stack')}" data-action="connector-tab" data-value="stack" aria-pressed="${connectorTab === 'stack'}">${icon('cpu')}My AI stack</button></div>${connectorTab === 'stack' ? stackPage() : registryPage()}</div>`;
+}
+
+function registryPage() {
+  const rows = sampleRows();
+  const visible = CONNECTORS.filter((item) => (connectorFilter === 'All' || item.category === connectorFilter) && item.name.toLowerCase().includes(connectorSearch.toLowerCase()));
+  return `<section class="registry-section"><div class="section-heading"><h2>${showSamples ? 'Sample connections' : 'Your connections'}<span class="count-label">${rows.length}</span></h2><div class="inline-group"><label class="sample-toggle"><input type="checkbox" id="sample-connections" ${showSamples ? 'checked' : ''}><span>Sample data</span></label>${help('sample')}</div></div>
+      ${rows.length ? `<div class="sample-notice">${icon('info')}Fictional records · not live accounts</div><div class="registry-table-wrap"><table class="registry-table"><thead><tr><th>App</th><th><span>Connection${help('connection')}</span></th><th><span>Health${help('health')}</span></th><th><span>Sync${help('sync')}</span></th><th>Connected</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>${rows.map((record) => { const connector = connectorFor(record.toolkit); const state = connectionPresentation(record); return `<tr><td class="registry-app"><span class="service-box">${mark(connector.icon)}</span><span><strong>${connector.name}</strong><small>Sample account</small></span></td><td data-label="Connection">${statePill(...state.connection)}</td><td data-label="Health">${statePill(...state.health)}</td><td data-label="Sync">${statePill(...state.sync)}</td><td data-label="Connected" class="date-cell">${dateLabel(record.connectedAt)}</td><td class="registry-more"><button class="icon-button" data-action="connection-details" data-value="${record.id}" aria-label="View ${connector.name} sample details">${icon('more')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="empty-registry">${icon('plug')}<span>No connected accounts</span><button class="button secondary" data-action="browse">Browse apps ${icon('arrow')}</button></div>`}</section>
+      <section class="catalog-section" id="catalog"><div class="section-heading"><h2>Add a connection</h2><label class="search-field">${icon('search')}<span class="sr-only">Search apps</span><input type="search" id="connector-search" value="${esc(connectorSearch)}" placeholder="Search apps"></label></div><div class="filter-tabs" role="group" aria-label="App category">${['All', 'Google', 'AI tools', 'Work', 'Development'].map((filter) => `<button class="filter-tab${selected(connectorFilter === filter)}" data-action="filter" data-value="${filter}" aria-pressed="${connectorFilter === filter}">${filter}</button>`).join('')}</div><div class="catalog-grid">${visible.map((connector) => `<article class="connector-card"><div class="connector-card-top"><span class="service-box">${mark(connector.icon)}</span>${['claude', 'chatgpt'].includes(connector.id) ? '<span class="small-label">Manual import</span>' : '<span class="small-label">Coming soon</span>'}</div><h3>${connector.name}</h3><div class="connector-card-bottom"><button class="text-button" data-action="connector" data-value="${connector.id}">Details</button>${['claude', 'chatgpt'].includes(connector.id) ? `<button class="button secondary compact" data-action="import-from" data-value="${connector.name}">Import ${icon('upload')}</button>` : '<button class="button secondary compact" disabled title="Composio setup is pending">Connect</button>'}</div></article>`).join('')}</div>${visible.length ? '' : '<div class="empty-inline">No apps found.</div>'}</section>`;
+}
+
+function stackPage() {
+  const summary = stackSummary(stack);
+  return `<section><div class="section-heading stack-heading"><div class="inline-group"><h2>My AI stack</h2><span class="small-label">Manual tracking</span>${help('stack')}</div><button class="button primary" data-action="add-stack">${icon('plus')}Add AI</button></div>
+    <div class="stack-stats"><div class="metric-card"><span>${icon('cpu')}Active tools</span><strong>${summary.active}</strong></div><div class="metric-card"><span>${icon('wallet')}Tracked monthly spend</span><strong class="spend">${Object.entries(summary.totals).map(([currency, total]) => esc(money(total, currency))).join(' <span>+</span> ') || '—'}</strong>${summary.unknownCosts ? `<small>${summary.unknownCosts} cost${summary.unknownCosts === 1 ? '' : 's'} not entered</small>` : ''}</div><div class="metric-card"><span>${icon('sliders')}Potential overlaps ${help('overlap')}</span><strong>${summary.overlap.length}</strong></div></div>
+    ${stack.length ? `<div class="stack-list">${stack.map((item) => `<article class="stack-row"><span class="service-box">${mark(item.name.toLowerCase() === 'chatgpt' ? 'chatgpt' : item.name.toLowerCase() === 'claude' ? 'claude' : 'cpu')}</span><div class="stack-name"><strong>${esc(item.name)}</strong><small>${esc(item.plan || 'Plan not entered')} · ${item.active ? 'Active' : 'Paused'}</small></div><div class="stack-version"><span>${esc(item.version || 'Version not entered')}</span><small>${item.checkedAt ? `Checked ${dateLabel(item.checkedAt)}` : 'Not checked'}${item.device ? ` · ${esc(item.device)}` : ''}</small></div><div class="stack-cost">${item.cost === null ? '—' : esc(money(item.cost, item.currency))}<small>${item.cost === null ? 'Cost not entered' : `per ${item.cycle}`}</small></div><button class="icon-button" data-action="edit-stack" data-value="${esc(item.id)}" aria-label="Edit ${esc(item.name)}">${icon('edit')}</button></article>`).join('')}</div>` : `<div class="empty-card">${icon('cpu')}<h3>No AI tools tracked yet</h3><button class="button secondary" data-action="add-stack">Add your first AI</button></div>`}
+    ${summary.overlap.length ? `<div class="overlap-row"><span>Compare before renewing</span>${summary.overlap.map((item) => `<span class="tag">${esc(item.capability)} × ${item.count}</span>`).join('')}${help('overlap')}</div>` : ''}<div class="quiet-caption">${icon('clock')}Automatic version checks & update feed <span class="small-label">Coming soon</span>${help('stack')}</div></section>`;
+}
+
+function memoryPage() {
+  const coverage = sourceCoverage(sources);
+  const categories = [{ id: 'chatgpt', name: 'ChatGPT', provider: 'ChatGPT', logo: 'chatgpt' }, { id: 'claude', name: 'Claude', provider: 'Claude', logo: 'claude' }, { id: 'files', name: 'Files', provider: 'File', icon: 'file' }, { id: 'notes', name: 'Notes', provider: 'Personal note', icon: 'edit' }];
+  return `<div class="page"><div class="page-heading"><h1>Memory</h1><div class="button-row"><button class="button secondary" data-action="export">${icon('download')}Export</button><button class="button primary" data-action="import">${icon('plus')}Import</button></div></div>
+    <section class="memory-overview"><div class="memory-overview-top"><div><span class="overline">Your context</span><div class="memory-quantity"><strong>${coverage.total}</strong><span>source${coverage.total === 1 ? '' : 's'}</span><span class="memory-size">${byteLabel(coverage.bytes)}</span></div></div><div class="local-badge">${icon('lock')}Local only${help('privacy')}</div></div><div class="coverage-label"><span>Source coverage</span><span>${coverage.categoriesAdded} of 4 types${help('coverage')}</span></div><div class="context-progress" role="progressbar" aria-label="Source coverage" aria-valuemin="0" aria-valuemax="4" aria-valuenow="${coverage.categoriesAdded}" aria-valuetext="${coverage.categoriesAdded} of 4 optional source types added"><span class="coverage-fill coverage-${coverage.categoriesAdded}"></span></div><div class="coverage-dots">${categories.map((category) => `<span class="${coverage.groups[category.id].count ? 'filled' : ''}"><span></span>${category.name}</span>`).join('')}</div></section>
+    <div class="memory-grid">${categories.map((category) => { const group = coverage.groups[category.id]; return `<article class="memory-tile${group.count ? ' has-source' : ''}"><div class="memory-tile-top"><span class="service-box">${category.logo ? mark(category.logo) : icon(category.icon)}</span>${group.count ? statePill(String(group.count), 'success', 'check') : '<span class="empty-dot"></span>'}</div><h2>${category.name}</h2><span class="source-date">${group.latestAt ? `Imported ${dateLabel(group.latestAt)}` : 'Not added'}</span>${group.needsReview ? `<div class="review-hint">${icon('clock')}Review suggested${help('refresh')}</div>` : ''}<button class="button secondary full" data-action="${category.id === 'notes' ? 'note' : 'import-from'}" data-value="${category.provider}">${icon(category.id === 'notes' ? 'plus' : 'upload')}${category.id === 'notes' ? 'Add note' : category.id === 'files' ? 'Add file' : 'Import'}</button>${category.logo ? `<button class="text-button guide-link" data-action="guide" data-value="${category.provider}">How to export ${icon('external')}</button>` : ''}</article>`; }).join('')}</div>
+    <section class="saved-section"><div class="section-heading"><h2>Saved sources<span class="count-label">${sources.length}</span></h2>${help('imports')}</div>${sources.length ? `<div class="source-list">${sources.map((source) => `<article class="source-row"><span class="source-type-icon">${['ChatGPT', 'Claude'].includes(source.provider) ? mark(source.provider.toLowerCase()) : icon(source.provider === 'Personal note' ? 'edit' : 'file')}</span><button class="source-title" data-action="source" data-value="${esc(source.id)}"><strong>${esc(source.name)}</strong><small>${esc(source.provider)} · ${byteLabel(source.bytes || new TextEncoder().encode(source.text).length)} · ${dateLabel(source.savedAt)}</small></button><span class="small-label">Local</span><button class="icon-button" data-action="remove-source" data-value="${esc(source.id)}" aria-label="Remove ${esc(source.name)}">${icon('trash')}</button></article>`).join('')}</div>` : '<div class="empty-inline">Your imported context and notes will appear here.</div>'}</section>
+    <div class="connected-memory"><div class="app-cluster">${mark('gmail')}${mark('drive')}${mark('calendar')}</div><div><strong>Connected sources</strong><small>Not indexed</small></div><a class="text-button" href="#connectors">Manage ${icon('arrow')}</a>${help('sync')}</div>
+    ${profile.achievements.includes('import') ? `<div class="milestone-inline">${icon('award')}Context carried over <span>Milestone earned</span></div>` : ''}</div>`;
+}
+
+function showDialog(kind, data = {}) {
+  if (!modal.open) {
+    modalHistory = [];
+    previousFocus = document.activeElement;
+    previousFocusKey = { action: previousFocus.dataset?.action, value: previousFocus.dataset?.value, label: previousFocus.getAttribute('aria-label') };
+  } else if (['help', 'guide', 'brands', 'google'].includes(kind) && kind !== modalState?.kind) modalHistory.push(modalState);
+  else modalHistory = [];
+  if (['settings', 'onboarding'].includes(kind)) profileDraft = structuredClone(profile);
+  modalState = { kind, tab: 'profile', step: 0, provider: 'ChatGPT', error: '', ...data };
+  renderDialog();
+  if (!modal.open) modal.showModal();
+  document.body.classList.add('modal-open');
+  document.querySelector('#dialog-title')?.focus({ preventScroll: true });
+}
+
+function closeDialog(force = false) {
+  if (!force && modalHistory.length) {
+    modalState = modalHistory.pop();
+    renderDialog();
+    document.querySelector('#dialog-title')?.focus({ preventScroll: true });
+    return;
+  }
+  modalHistory = [];
+  readGeneration++;
+  modal.close();
+}
+function heading(title, subtitle = '') { return `<header class="modal-heading"><h2 id="dialog-title" tabindex="-1">${esc(title)}</h2>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</header>`; }
+function modalFooter(primary, action, secondary = 'Cancel') { return `<div class="modal-footer"><button type="button" class="button ghost" data-action="close">${secondary}</button><button type="button" class="button primary" data-action="${action}">${primary}</button></div>`; }
+
+function profileFields(prefix = 'profile') {
+  return `<div class="profile-avatar-row">${avatar(true)}<div><button type="button" class="button secondary" data-action="avatar">${icon('image')}Upload photo</button>${profile.avatar ? '<button type="button" class="text-button" data-action="remove-avatar">Remove</button>' : ''}<small>JPG, PNG, WebP · up to 4 MiB</small></div></div><input id="avatar-file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" aria-label="Upload profile photo"><div class="field"><label for="${prefix}-name">Name <span>Optional</span></label><input id="${prefix}-name" name="name" data-draft="name" maxlength="40" autocomplete="given-name" placeholder="Your first name" value="${esc(profileDraft.name)}"></div><fieldset><legend>Your role</legend><div class="chips">${ROLES.map((role) => `<button type="button" class="chip${selected(profileDraft.roles.includes(role))}" data-action="role" data-value="${role}" aria-pressed="${profileDraft.roles.includes(role)}">${role}</button>`).join('')}</div></fieldset><fieldset><legend>Interests</legend><div class="chips">${INTERESTS.map((interest) => `<button type="button" class="chip${selected(profileDraft.interests.includes(interest))}" data-action="interest" data-value="${interest}" aria-pressed="${profileDraft.interests.includes(interest)}">${interest}</button>`).join('')}</div></fieldset><details class="advanced-options"><summary>Response preferences</summary><div class="field"><label for="${prefix}-length">Answer length</label><div class="range-control"><button type="button" class="icon-button" data-action="reply-less" aria-label="Shorter answers">−</button><input id="${prefix}-length" data-draft="replyLength" type="range" min="0" max="2" step="1" value="${profileDraft.replyLength}" aria-valuetext="${['Concise', 'Balanced', 'Detailed'][profileDraft.replyLength]}"><button type="button" class="icon-button" data-action="reply-more" aria-label="More detailed answers">+</button></div><div class="range-labels"><span>Concise</span><strong id="${prefix}-length-label">${['Concise', 'Balanced', 'Detailed'][profileDraft.replyLength]}</strong><span>Detailed</span></div></div><div class="field"><label for="${prefix}-initiative">Assistant initiative</label><select id="${prefix}-initiative" data-draft="proactivity">${PROACTIVITY.map((choice) => `<option value="${choice.id}" ${profileDraft.proactivity === choice.id ? 'selected' : ''}>${choice.name}</option>`).join('')}</select></div></details>`;
+}
+
+function appearanceOptions() {
+  return `<div class="appearance-options" role="group" aria-label="Appearance">${[{ id: 'light', label: 'Light', icon: 'sun' }, { id: 'dark', label: 'Dark', icon: 'moon' }, { id: 'system', label: 'System', icon: 'monitor' }].map((choice) => `<button class="appearance-option${selected(profile.appearance === choice.id)}" data-action="mode" data-value="${choice.id}" aria-pressed="${profile.appearance === choice.id}">${icon(choice.icon)}${choice.label}</button>`).join('')}</div><div class="field-label">Color</div><div class="theme-options" role="group" aria-label="Color theme">${THEMES.map((theme) => `<button class="theme-option${selected(profile.theme === theme.id)}" data-action="theme" data-value="${theme.id}" aria-pressed="${profile.theme === theme.id}"><span class="swatch ${theme.id}">${profile.theme === theme.id ? icon('check') : ''}</span><span>${theme.name}</span></button>`).join('')}</div>`;
+}
+
+function companionOptions() {
+  return `<div class="companion-stage">${companionArt(profile.companion, profile.accessory)}<span>${profile.companion === 'none' ? 'No companion' : pet().name}</span></div><div class="companion-options" role="group" aria-label="Choose a companion">${COMPANIONS.map((companion) => `<button class="companion-option${selected(profile.companion === companion.id)}" data-action="choose-companion" data-value="${companion.id}" aria-pressed="${profile.companion === companion.id}" title="${companion.description}">${companionArt(companion.id, 'none')}<span>${companion.name}</span></button>`).join('')}</div>${profile.companion !== 'none' ? `<div class="accessory-options" role="group" aria-label="Accessory">${[{ id: 'none', label: 'No accessory' }, { id: 'leaf', label: 'Sprout' }, { id: 'scarf', label: 'Scarf' }].map((accessory) => `<button class="chip${selected(profile.accessory === accessory.id)}" data-action="accessory" data-value="${accessory.id}" aria-pressed="${profile.accessory === accessory.id}">${accessory.label}</button>`).join('')}</div><button class="text-button centered" data-action="pet-hello">${icon('play')}Preview animation</button>` : ''}`;
+}
+
+function settingsDialog() {
+  const tab = modalState.tab;
+  return `${heading('Settings')}<div class="section-tabs settings-tabs" role="group" aria-label="Settings category">${['profile', 'appearance', 'companion'].map((item) => `<button class="section-tab${selected(tab === item)}" data-action="settings-tab" data-value="${item}" aria-pressed="${tab === item}">${({ profile: 'Profile', appearance: 'Appearance', companion: 'Companion' })[item]}</button>`).join('')}</div>${tab === 'profile' ? `<form id="profile-form">${profileFields()}<div class="modal-footer"><button type="button" class="text-button" data-action="google-profile">Google profile <span class="small-label">Soon</span></button><button class="button primary" type="submit">Save</button></div></form>` : tab === 'appearance' ? `${appearanceOptions()}${modalFooter('Save', 'save-appearance')}` : `${companionOptions()}${modalFooter('Save', 'save-companion')}`}<div class="settings-links"><button class="text-button" data-action="brands">Brand concepts</button><button class="text-button" data-action="help" data-value="privacy">Data & privacy</button><button class="text-button" data-action="clear-preview">Clear local data</button></div>`;
+}
+
+function onboardingDialog() {
+  const step = modalState.step;
+  return `<div class="onboard-progress"><span>Personalize</span><progress value="${step + 1}" max="3" aria-label="Step ${step + 1} of 3"></progress><span>${step + 1} / 3</span></div>${heading(['Choose appearance', 'A little about you', 'Choose a companion'][step], 'Optional. Change it anytime.')}${step === 0 ? appearanceOptions() : step === 1 ? `<form id="onboarding-profile-form">${profileFields('onboard')}</form>` : companionOptions()}<div class="modal-footer"><button class="button ghost" data-action="skip-onboarding">Skip</button><div class="button-row">${step ? '<button class="button secondary" data-action="onboarding-back">Back</button>' : ''}<button class="button primary" data-action="onboarding-next">${step === 2 ? 'Finish' : 'Continue'}${icon('arrow')}</button></div></div>`;
+}
+
+function importDialog() {
+  const file = modalState.file;
+  if (file) return `${heading('Review your import')}<div class="source-meta"><span>${icon('file')}${esc(file.name)}</span><span>${byteLabel(file.bytes)}</span><span>${esc(modalState.provider)}</span></div><pre class="source-preview" tabindex="0" aria-label="Selected import text">${esc(file.text)}</pre><div class="local-notice">${icon('lock')}Stored in this tab only · not sent to AI${help('privacy')}</div><label class="checkbox-row"><input type="checkbox" id="import-consent" ${modalState.consent ? 'checked' : ''}><span>I reviewed this text and want to import it locally.</span></label><p class="field-hint">Remove secrets and sensitive details first. Automated checks are not a guarantee.</p><p class="form-error" role="alert">${esc(modalState.error)}</p><div class="modal-footer"><button class="button secondary" data-action="import-reset">Back</button><button class="button primary" data-action="confirm-import" ${modalState.consent && !modalState.busy ? '' : 'disabled'}>${modalState.busy ? 'Importing…' : 'Import'}</button></div>`;
+  return `${heading('Import context')}<div class="provider-options" role="group" aria-label="Import source">${['ChatGPT', 'Claude', 'File', 'Other AI'].map((provider) => `<button class="provider-option${selected(modalState.provider === provider)}" data-action="import-provider" data-value="${provider}" aria-pressed="${modalState.provider === provider}">${['ChatGPT', 'Claude'].includes(provider) ? mark(provider.toLowerCase()) : icon(provider === 'File' ? 'file' : 'cpu')}<span>${provider === 'File' ? 'Files' : provider}</span></button>`).join('')}</div>${EXPORT_GUIDES[modalState.provider] ? `<button class="guide-callout" data-action="guide" data-value="${modalState.provider}">${icon('help')}How to export from ${modalState.provider}${icon('arrow')}</button>` : ''}<div class="dropzone" id="context-dropzone">${icon('upload')}<strong>Drop a file here</strong><button class="button secondary" data-action="choose-file">Choose file</button><input id="context-file" type="file" accept=".txt,.md,.json,text/plain,text/markdown,application/json" class="hidden" aria-label="Choose a context file"><small>.txt, .md, .json · max 1 MiB · no ZIP or PDF</small>${modalState.reading ? '<progress aria-label="Reading your file"></progress>' : ''}</div><div class="import-methods"><button class="text-button" data-action="paste-import">${icon('edit')}Paste text</button><button class="text-button" data-action="sample-import">Try a sample</button>${help('imports')}</div>${modalState.paste ? `<div class="field"><label for="pasted-context">Selected context</label><textarea id="pasted-context" maxlength="64000" placeholder="Paste only what you want to bring.">${esc(modalState.pasteText || '')}</textarea></div><button class="button primary" data-action="review-paste">Review text ${icon('arrow')}</button>` : ''}<p class="form-error" role="alert">${esc(modalState.error)}</p><div class="local-notice">${icon('lock')}Local only${help('privacy')}</div>`;
+}
+
+function guideDialog() {
+  const provider = modalState.provider;
+  const guide = EXPORT_GUIDES[provider];
+  return `${heading(`Import from ${provider}`)}<div class="section-tabs" role="group" aria-label="Export guide method"><button class="section-tab${selected(modalState.method !== 'archive')}" data-action="guide-method" data-value="quick">Quick context</button><button class="section-tab${selected(modalState.method === 'archive')}" data-action="guide-method" data-value="archive">Account export</button></div>${modalState.method === 'archive' ? `<ol class="guide-steps">${guide.steps.map((step, index) => `<li><span>${index + 1}</span><div><strong>${step.title}</strong><p>${step.text}</p></div></li>`).join('')}</ol><details class="advanced-options"><summary>Availability & limitations</summary><p>${guide.note}</p></details>` : `<ol class="guide-steps"><li><span>1</span><div><strong>Ask ${provider} for a memory summary</strong><p>Copy the prompt below into your existing chat.</p></div></li><li><span>2</span><div><strong>Review the answer</strong><p>Keep useful preferences and goals. Remove anything private or incorrect.</p></div></li><li><span>3</span><div><strong>Paste it here</strong><p>A summary may be partial. This does not migrate your account or subscriptions.</p></div></li></ol><div class="copy-prompt"><p>${guide.quick}</p><button class="button secondary" data-action="copy-guide" data-value="${provider}">Copy prompt</button></div>`}<div class="modal-footer"><a class="text-button" href="${guide.url}" target="_blank" rel="noopener noreferrer">Official guide ${icon('external')}</a><button class="button primary" data-action="import-from" data-value="${provider}">Import ${icon('arrow')}</button></div>`;
+}
+
+function connectorDialog() {
+  const connector = CONNECTORS.find(({ id }) => id === modalState.id);
+  return `${heading(connector.name)}<div class="connector-detail-logo">${mark(connector.icon)}<span class="small-label">${['claude', 'chatgpt'].includes(connector.id) ? 'Manual import available' : 'Coming soon'}</span></div><div class="detail-block"><h3>Use it for</h3><p>${connector.benefit}</p></div><div class="detail-block"><h3>Access</h3><p>${connector.permission}</p></div><div class="local-notice">${icon('info')}No account is connected in this preview.</div><div class="modal-footer"><button class="button ghost" data-action="close">Close</button>${['claude', 'chatgpt'].includes(connector.id) ? `<button class="button primary" data-action="import-from" data-value="${connector.name}">Import context</button>` : '<button class="button secondary" disabled>Connect · coming soon</button>'}</div>`;
+}
+
+function connectionDetails() {
+  const record = sampleRows().find(({ id }) => id === modalState.id);
+  if (!record) return heading('Connection not available');
+  const connector = connectorFor(record.toolkit);
+  const state = connectionPresentation(record);
+  return `${heading(connector.name, 'Sample record · not a live account')}<dl class="detail-grid"><dt>Connection</dt><dd>${statePill(...state.connection)}</dd><dt>Health</dt><dd>${statePill(...state.health)}</dd><dt>Connected</dt><dd>${dateLabel(record.connectedAt)}</dd><dt>Last checked</dt><dd>${dateLabel(record.checkedAt)}</dd><dt>Sync</dt><dd>${statePill(...state.sync)}</dd><dt>Last sync</dt><dd>${dateLabel(record.syncedAt)}</dd><dt>Indexed records</dt><dd>${record.records ?? '—'}</dd></dl><div class="local-notice">${icon('info')}Authorization, health and indexing are separate.${help('sync')}</div><div class="modal-footer"><button class="button ghost" data-action="close">Close</button><button class="button secondary" disabled>Live actions not connected</button></div>`;
+}
+
+function stackDialog() {
+  const entry = modalState.entry;
+  return `${heading(modalState.editing ? 'Edit AI tool' : 'Add AI tool', 'Manual tracking. No account access required.')}<form id="stack-form"><div class="field-row"><div class="field"><label for="stack-name">AI tool</label><input id="stack-name" name="name" data-stack="name" list="ai-tools" maxlength="60" required placeholder="e.g. ChatGPT" value="${esc(entry.name)}"><datalist id="ai-tools"><option>ChatGPT</option><option>Claude</option><option>Gemini</option><option>Wispr Flow</option><option>Google Workspace</option><option>Perplexity</option></datalist></div><div class="field"><label for="stack-plan">Plan</label><input id="stack-plan" name="plan" data-stack="plan" maxlength="60" placeholder="Optional" value="${esc(entry.plan)}"></div></div><div class="field-row three"><div class="field"><label for="stack-cost">Cost</label><input id="stack-cost" type="number" name="cost" data-stack="cost" min="0" max="100000" step=".01" placeholder="Unknown" value="${entry.cost ?? ''}"></div><div class="field"><label for="stack-currency">Currency</label><select id="stack-currency" name="currency" data-stack="currency">${['USD', 'EUR', 'GBP'].map((currency) => `<option ${entry.currency === currency ? 'selected' : ''}>${currency}</option>`).join('')}</select></div><div class="field"><label for="stack-cycle">Billed</label><select id="stack-cycle" name="cycle" data-stack="cycle"><option value="month" ${entry.cycle === 'month' ? 'selected' : ''}>Monthly</option><option value="year" ${entry.cycle === 'year' ? 'selected' : ''}>Yearly</option></select></div></div><fieldset><legend>What you use it for</legend><div class="chips">${CAPABILITIES.map((capability) => `<button type="button" class="chip${selected(entry.capabilities.includes(capability))}" data-action="stack-capability" data-value="${capability}" aria-pressed="${entry.capabilities.includes(capability)}">${capability}</button>`).join('')}</div></fieldset><details class="advanced-options"><summary>Version & device</summary><div class="field-row"><div class="field"><label for="stack-version">Version <span>Self-reported</span></label><input id="stack-version" data-stack="version" maxlength="60" value="${esc(entry.version)}" placeholder="Not checked"></div><div class="field"><label for="stack-device">Device</label><input id="stack-device" data-stack="device" maxlength="60" value="${esc(entry.device)}" placeholder="e.g. Mac / browser"></div></div><div class="inline-group"><span class="field-hint">${entry.checkedAt ? `You checked it on ${dateLabel(entry.checkedAt)}` : 'No version check recorded'}</span><button type="button" class="text-button" data-action="stack-checked">Mark checked today</button></div></details><label class="checkbox-row"><input type="checkbox" id="stack-active" data-stack="active" ${entry.active ? 'checked' : ''}><span>Active subscription</span></label><p class="form-error" role="alert">${esc(modalState.error)}</p><div class="modal-footer">${modalState.editing ? `<button type="button" class="button ghost danger-text" data-action="remove-stack" data-value="${esc(entry.id)}">Remove</button>` : '<button type="button" class="button ghost" data-action="close">Cancel</button>'}<button class="button primary" type="submit">Save</button></div></form>`;
+}
+
+function renderDialog() {
+  if (!modalState) return;
+  preserveFocus(modal, () => {
+    const { kind } = modalState;
+    let body = '';
+    if (kind === 'settings') body = settingsDialog();
+    if (kind === 'onboarding') body = onboardingDialog();
+    if (kind === 'import') body = importDialog();
+    if (kind === 'guide') body = guideDialog();
+    if (kind === 'connector') body = connectorDialog();
+    if (kind === 'connection-details') body = connectionDetails();
+    if (kind === 'stack') body = stackDialog();
+    if (kind === 'help') body = `${heading(HELP[modalState.key][0])}<p class="help-copy">${esc(HELP[modalState.key][1])}</p>${modalFooter('Got it', 'close', '')}`;
+    if (kind === 'note') body = `${heading('Add note')}<form id="note-form"><div class="field"><label for="note-title">Title</label><input id="note-title" name="title" maxlength="80" required value="${esc(modalState.noteTitle || '')}" placeholder="A useful preference"></div><div class="field"><label for="note-text">Note</label><textarea id="note-text" name="text" maxlength="6000" required placeholder="What should your assistant know?">${esc(modalState.noteText || '')}</textarea></div><div class="local-notice">${icon('lock')}Local only · no AI request${help('privacy')}</div><p class="form-error" role="alert">${esc(modalState.error)}</p><div class="modal-footer"><button type="button" class="button ghost" data-action="close">Cancel</button><button class="button primary" type="submit">Save note</button></div></form>`;
+    if (kind === 'source' || kind === 'remove-source') {
+      const source = sources.find(({ id }) => id === modalState.id);
+      body = !source ? heading('Source not available') : kind === 'remove-source' ? `${heading('Remove source?', source.name)}<p class="help-copy">This removes the local copy, not your original file.</p><div class="modal-footer"><button class="button secondary" data-action="close">Keep</button><button class="button danger" data-action="confirm-remove" data-value="${esc(source.id)}">Remove</button></div>` : `${heading(source.name)}<div class="source-meta"><span>${esc(source.provider)}</span><span>Imported ${dateLabel(source.savedAt)}</span><span>User-supplied</span></div><pre class="source-preview" tabindex="0" aria-label="Original source text">${esc(source.text)}</pre><div class="local-notice">${icon('lock')}Original text · not an AI summary${help('privacy')}</div>${modalFooter('Close', 'close', '')}`;
+    }
+    if (kind === 'brands') body = `${heading('Brand concepts', 'Working names. Availability and trademarks are not verified.')}<div class="brand-options">${BRANDS.map((direction) => `<article><span class="brand-symbol">${brandMark(direction.id)}</span><div><strong>${direction.name}</strong><p>${direction.tagline}</p></div><button class="button secondary" data-action="brand" data-value="${direction.id}">${profile.brand === direction.id ? 'Selected' : 'Use'}</button></article>`).join('')}</div><div class="modal-footer"><button class="text-button" data-action="download-logo">${icon('download')}Download SVG logo</button><button class="button primary" data-action="close">Done</button></div>`;
+    if (kind === 'google') body = `${heading('Google profile', 'Coming soon')}<p class="help-copy">Google sign-in can bring your name and photo once connected. It does not grant Gmail or Drive access. You can upload a photo locally now.</p>${modalFooter('Got it', 'close', '')}`;
+    if (kind === 'clear') body = `${heading('Clear local preview data?')}<p class="help-copy">Removes local preferences, your avatar, context and tracked subscriptions. Original files and real accounts are not changed.</p><div class="modal-footer"><button class="button secondary" data-action="close">Keep data</button><button class="button danger" data-action="confirm-clear">Clear local data</button></div>`;
+    if (kind === 'new-chat') body = `${heading('Start a new chat?')}<p class="help-copy">This clears the current unsent drafts. Your saved memory stays.</p><div class="modal-footer"><button class="button secondary" data-action="close">Keep draft</button><button class="button primary" data-action="confirm-new-chat">New chat</button></div>`;
+    if (kind === 'remove-stack') body = `${heading('Remove tracked AI?')}<p class="help-copy">Removes this local record only. It does not cancel a subscription.</p><div class="modal-footer"><button class="button secondary" data-action="close">Keep</button><button class="button danger" data-action="confirm-remove-stack" data-value="${esc(modalState.id)}">Remove record</button></div>`;
+    modal.innerHTML = `<div class="modal-content"><button class="icon-button modal-close" data-action="close" aria-label="Close dialog">${icon('close')}</button>${body}</div>`;
+  });
+}
+
+function commitProfile() {
+  const patch = Object.fromEntries(['name', 'roles', 'interests', 'replyLength', 'proactivity'].map((key) => [key, profileDraft[key]]));
+  saveProfile({ ...patch, profileSaved: true }, 'profile');
+  profileDraft = structuredClone(profile);
+}
+function repaint() { render(); if (modalState) renderDialog(); }
+
+async function readContext(file) {
+  if (!file || modalState?.kind !== 'import') return;
+  const generation = ++readGeneration;
+  const state = modalState;
+  const relevant = () => generation === readGeneration && (modalState === state || modalHistory.includes(state));
+  state.file = null; state.error = ''; state.reading = true; renderDialog();
+  try {
+    if (file.size > MAX_CONTEXT_BYTES) throw new Error('Choose a file up to 1 MiB.');
+    const buffer = await file.arrayBuffer();
+    if (!relevant()) return;
+    state.file = validateContextFile(file.name, buffer); state.consent = false;
+  } catch (error) { if (!relevant()) return; state.error = error.message; }
+  state.reading = false;
+  if (modalState === state) renderDialog();
+}
+
+async function makeSource(file, provider) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(file.text));
+  return { ...file, provider, id: crypto.randomUUID(), hash: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''), savedAt: new Date().toISOString() };
+}
+function download(content, filename, type) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement('a'); link.href = url; link.download = filename;
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function uploadAvatar(file) {
+  const generation = ++avatarGeneration;
+  if (!file) return;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 4 * 1024 * 1024) { notify('Choose a JPG, PNG or WebP up to 4 MiB.', 'info'); return; }
+  try {
+    const image = await createImageBitmap(file);
+    if (image.width * image.height > 32000000) { image.close(); throw new Error('image-too-large'); }
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 256;
+    const context = canvas.getContext('2d'); const side = Math.min(image.width, image.height);
+    context.fillStyle = '#f3ebdf'; context.fillRect(0, 0, 256, 256);
+    context.drawImage(image, (image.width - side) / 2, (image.height - side) / 2, side, side, 0, 0, 256, 256); image.close();
+    if (generation !== avatarGeneration) return;
+    saveProfile({ avatar: canvas.toDataURL('image/jpeg', .85) }); repaint(); notify('Photo saved on this device.');
+  } catch { if (generation === avatarGeneration) notify('Could not open that image. Try a smaller file.', 'info'); }
+}
+
+function openStack(id) {
+  const existing = stack.find((item) => item.id === id);
+  const entry = existing ? structuredClone(existing) : { id: crypto.randomUUID(), name: '', plan: '', cost: null, currency: 'USD', cycle: 'month', active: true, version: '', device: '', checkedAt: null, capabilities: [] };
+  showDialog('stack', { entry, editing: Boolean(existing) });
+}
+
+const actions = {
+  close: closeDialog,
+  help: (key) => { if (HELP[key]) showDialog('help', { key }); },
+  settings: () => showDialog('settings'),
+  appearance: () => showDialog('settings', { tab: 'appearance' }),
+  companion: () => showDialog('settings', { tab: 'companion' }),
+  onboarding: () => showDialog('onboarding'),
+  brands: () => showDialog('brands'),
+  'settings-tab': (tab) => { if (['profile', 'appearance', 'companion'].includes(tab)) { modalState.tab = tab; renderDialog(); } },
+  'pet-hello': () => celebrate(profile.companion === 'none' ? 'No companion selected.' : `${pet().name}, on your side.`),
+  theme: (value) => { if (THEMES.some(({ id }) => id === value)) { saveProfile({ theme: value, themeChosen: true }, 'style'); repaint(); } },
+  mode: (value) => { if (['light', 'dark', 'system'].includes(value)) { saveProfile({ appearance: value, themeChosen: true }, 'style'); repaint(); } },
+  'save-appearance': () => { saveProfile({ themeChosen: true }, 'style'); closeDialog(); render(); notify('Appearance saved.'); },
+  'choose-companion': (value) => { if (COMPANIONS.some(({ id }) => id === value)) { saveProfile({ companion: value, companionChosen: true }, 'companion'); repaint(); } },
+  accessory: (value) => { if (['none', 'leaf', 'scarf'].includes(value)) { saveProfile({ accessory: value }); repaint(); } },
+  'save-companion': () => { saveProfile({ companionChosen: true }, 'companion'); closeDialog(); render(); celebrate('Companion preference saved.'); },
+  role: (value) => { if (!ROLES.includes(value)) return; profileDraft.roles = profileDraft.roles.includes(value) ? profileDraft.roles.filter((item) => item !== value) : [...profileDraft.roles, value]; renderDialog(); },
+  interest: (value) => { if (!INTERESTS.includes(value)) return; profileDraft.interests = profileDraft.interests.includes(value) ? profileDraft.interests.filter((item) => item !== value) : [...profileDraft.interests, value]; renderDialog(); },
+  'reply-less': () => { profileDraft.replyLength = Math.max(0, profileDraft.replyLength - 1); renderDialog(); },
+  'reply-more': () => { profileDraft.replyLength = Math.min(2, profileDraft.replyLength + 1); renderDialog(); },
+  'onboarding-back': () => { modalState.step = Math.max(0, modalState.step - 1); renderDialog(); },
+  'onboarding-next': () => {
+    if (modalState.step === 0) saveProfile({ themeChosen: true }, 'style');
+    if (modalState.step === 1) commitProfile();
+    if (modalState.step === 2) { saveProfile({ companionChosen: true, onboarded: true }, 'companion'); closeDialog(); render(); celebrate('Ready. The rest can wait.'); return; }
+    modalState.step++; repaint();
+  },
+  'skip-onboarding': () => { if (modalState.step === 2) { saveProfile({ onboarded: true }); closeDialog(); render(); return; } modalState.step++; renderDialog(); },
+  'connector-tab': (value) => { if (['connections', 'stack'].includes(value)) { connectorTab = value; render(); } },
+  filter: (value) => { connectorFilter = value; render(); },
+  browse: () => document.querySelector('#catalog')?.scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' }),
+  connector: (value) => { if (CONNECTORS.some(({ id }) => id === value)) showDialog('connector', { id: value }); },
+  'connection-details': (value) => showDialog('connection-details', { id: value }),
+  import: () => showDialog('import'),
+  'import-from': (value) => { if (PROVIDERS.includes(value)) showDialog('import', { provider: value }); },
+  'import-provider': (value) => { if (PROVIDERS.includes(value)) { modalState.provider = value; renderDialog(); } },
+  guide: (value) => { if (EXPORT_GUIDES[value]) showDialog('guide', { provider: value }); },
+  'guide-method': (value) => { modalState.method = value; renderDialog(); },
+  'copy-guide': async (value) => { try { await navigator.clipboard.writeText(EXPORT_GUIDES[value].quick); notify('Prompt copied. Paste it into your existing AI chat.'); } catch { notify('Clipboard unavailable. Select and copy the prompt above.', 'info'); } },
+  'choose-file': () => document.querySelector('#context-file')?.click(),
+  'paste-import': () => { modalState.paste = true; renderDialog(); document.querySelector('#pasted-context')?.focus(); },
+  'review-paste': () => { try { modalState.file = validateContextFile('selected-context.txt', new TextEncoder().encode(modalState.pasteText || '')); modalState.consent = false; modalState.error = ''; } catch (error) { modalState.error = error.message; } renderDialog(); },
+  'sample-import': () => { modalState.provider = 'Other AI'; modalState.file = validateContextFile('example-context.md', new TextEncoder().encode('# Fictional sample\n\nI am a freelance designer.\nI prefer concise English answers and practical next steps.\nMy interests include accessible products and learning.\n\nThis is sample data, not an inference about you.\n')); modalState.consent = false; renderDialog(); },
+  'import-reset': () => { readGeneration++; modalState.file = null; modalState.error = ''; modalState.consent = false; renderDialog(); },
+  'confirm-import': async () => {
+    if (!modalState?.file || !modalState.consent || modalState.busy) return;
+    const state = modalState; state.busy = true; renderDialog();
+    try {
+      const source = await makeSource(state.file, state.provider); if (modalState !== state && !modalHistory.includes(state)) return;
+      const next = addSource(sources, source); const duplicate = next === sources;
+      saveSources(next); saveProfile({}, 'import'); closeDialog(true); location.hash = 'memory'; render();
+      celebrate(duplicate ? 'Already imported. No duplicate added.' : 'Context imported. A head start worth keeping.');
+    } catch (error) { if (modalState === state || modalHistory.includes(state)) { state.error = error.message; state.busy = false; if (modalState === state) renderDialog(); } }
+  },
+  note: () => showDialog('note'),
+  source: (value) => showDialog('source', { id: value }),
+  'remove-source': (value) => showDialog('remove-source', { id: value }),
+  'confirm-remove': (value) => { try { saveSources(sources.filter(({ id }) => id !== value)); closeDialog(); render(); notify('Local source removed. Original file unchanged.'); } catch (error) { notify(error.message, 'info'); } },
+  export: () => { download(JSON.stringify(buildExport(profile, sources), null, 2), 'coffeenator-context.json', 'application/json'); saveProfile({}, 'export'); render(); notify('Context export created. Subscription records are not included.'); },
+  avatar: () => document.querySelector('#avatar-file')?.click(),
+  'remove-avatar': () => { avatarGeneration++; saveProfile({ avatar: '' }); repaint(); notify('Photo removed.'); },
+  'google-profile': () => showDialog('google'),
+  'add-stack': () => openStack(),
+  'edit-stack': (value) => openStack(value),
+  'stack-capability': (value) => { if (!CAPABILITIES.includes(value)) return; const entry = modalState.entry; entry.capabilities = entry.capabilities.includes(value) ? entry.capabilities.filter((item) => item !== value) : [...entry.capabilities, value]; renderDialog(); },
+  'stack-checked': () => { modalState.entry.checkedAt = new Date().toISOString(); renderDialog(); notify('Marked as checked by you. No automatic version check was run.'); },
+  'remove-stack': (value) => showDialog('remove-stack', { id: value }),
+  'confirm-remove-stack': (value) => { try { saveStack(stack.filter(({ id }) => id !== value)); closeDialog(); render(); notify('Tracking record removed. Subscription unchanged.'); } catch (error) { notify(error.message, 'info'); } },
+  brand: (value) => { const direction = BRANDS.find(({ id }) => id === value); if (!direction) return; saveProfile({ brand: value, theme: direction.theme, themeChosen: true }, 'style'); repaint(); notify(`Previewing ${direction.name}.`); },
+  'download-logo': () => { const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); const svg = brandMark(profile.brand).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" ').replaceAll('currentColor', color).replaceAll('var(--logo-face, #805039)', '#faf8f5'); download(svg, `${profile.brand}-logo-concept.svg`, 'image/svg+xml'); notify('SVG logo exported.'); },
+  suggestion: (value) => { composerDraft = value; render(); document.querySelector('#chat-input')?.focus(); },
+  animation: () => { clearTimeout(brewTimer); brewing = !brewing; render(); if (brewing) brewTimer = setTimeout(() => { brewing = false; render(); }, 6500); },
+  'save-chat-note': () => showDialog('note', { noteTitle: 'Chat draft', noteText: messages.at(-1) || composerDraft }),
+  'new-chat': () => { if (messages.length || composerDraft) showDialog('new-chat'); else document.querySelector('#chat-input')?.focus(); },
+  'confirm-new-chat': () => { messages = []; composerDraft = ''; brewing = false; clearTimeout(brewTimer); closeDialog(); render(); document.querySelector('#chat-input')?.focus(); },
+  'clear-preview': () => showDialog('clear'),
+  'confirm-clear': () => {
+    try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(STACK_KEY); sessionStorage.removeItem(SESSION_KEY); }
+    catch { notify('Could not clear browser storage. Check browser permissions.', 'info'); return; }
+    profile = createProfile(); profileDraft = structuredClone(profile); sources = []; stack = []; messages = []; composerDraft = ''; showSamples = false;
+    closeDialog(); location.hash = 'chat'; applyAppearance(); render(); notify('Local preview data cleared.');
+  },
+};
+
+document.addEventListener('click', (event) => {
+  if (event.target.closest('.skip-link')) { event.preventDefault(); document.querySelector('#main')?.focus(); return; }
+  const target = event.target.closest('[data-action]');
+  if (!target || target.disabled || !actions[target.dataset.action]) return;
+  event.preventDefault();
+  Promise.resolve(actions[target.dataset.action](target.dataset.value)).catch(() => notify('Could not complete that action. Your existing data has not been removed.', 'info'));
+});
+
+function captureField(target) {
+  if (target.dataset.draft === 'name') profileDraft.name = target.value;
+  if (target.dataset.draft === 'proactivity') profileDraft.proactivity = target.value;
+  if (target.dataset.draft === 'replyLength') {
+    profileDraft.replyLength = Number(target.value);
+    const text = ['Concise', 'Balanced', 'Detailed'][profileDraft.replyLength]; target.setAttribute('aria-valuetext', text);
+    const label = document.getElementById(`${target.id}-label`); if (label) label.textContent = text;
+  }
+  if (target.dataset.stack && modalState?.kind === 'stack') {
+    const key = target.dataset.stack;
+    modalState.entry[key] = key === 'active' ? target.checked : key === 'cost' ? target.value === '' ? null : Number(target.value) : target.value;
+  }
+  if (target.id === 'chat-input') composerDraft = target.value;
+  if (target.id === 'pasted-context' && modalState) modalState.pasteText = target.value;
+  if (target.id === 'note-title' && modalState) modalState.noteTitle = target.value;
+  if (target.id === 'note-text' && modalState) modalState.noteText = target.value;
+}
+document.addEventListener('input', (event) => { captureField(event.target); if (event.target.id === 'connector-search') { connectorSearch = event.target.value; render(); } });
+document.addEventListener('change', (event) => {
+  const target = event.target; captureField(target);
+  if (target.id === 'context-file') readContext(target.files[0]);
+  if (target.id === 'avatar-file') uploadAvatar(target.files[0]);
+  if (target.id === 'sample-connections') { showSamples = target.checked; render(); }
+  if (target.id === 'import-consent' && modalState?.kind === 'import') { modalState.consent = target.checked; document.querySelector('[data-action="confirm-import"]').disabled = !target.checked; }
+});
+
+document.addEventListener('submit', async (event) => {
+  const form = event.target;
+  if (!['profile-form', 'onboarding-profile-form', 'chat-form', 'note-form', 'stack-form'].includes(form.id)) return;
+  event.preventDefault();
+  if (form.id === 'onboarding-profile-form') { actions['onboarding-next'](); return; }
+  if (form.id === 'profile-form') { commitProfile(); closeDialog(); render(); celebrate('Preferences saved.'); }
+  if (form.id === 'chat-form') {
+    const text = composerDraft.trim().slice(0, 2000); if (!text) { document.querySelector('#chat-input')?.focus(); return; }
+    messages = [...messages, text].slice(-8); composerDraft = ''; brewing = false; clearTimeout(brewTimer); render();
+    notify('Draft only. Configure an AI provider to send it.', 'info');
+  }
+  if (form.id === 'stack-form') {
+    try { const entry = modalState.entry; if (!entry.name.trim()) throw new Error('Enter the name of your AI tool.'); saveStack([...stack.filter(({ id }) => id !== entry.id), entry]); closeDialog(); render(); notify('AI tracking entry saved locally.'); }
+    catch (error) { modalState.error = error.message; renderDialog(); }
+  }
+  if (form.id === 'note-form') {
+    const state = modalState; const data = new FormData(form); form.querySelector('[type="submit"]').disabled = true;
+    try {
+      const title = String(data.get('title') || '').trim().replace(/[^\p{L}\p{N} ._-]/gu, '').slice(0, 80) || 'Personal note';
+      const file = validateContextFile(`${title}.txt`, new TextEncoder().encode(String(data.get('text') || '')));
+      const source = await makeSource(file, 'Personal note'); if (modalState !== state && !modalHistory.includes(state)) return;
+      saveSources(addSource(sources, source)); saveProfile({}, 'note'); closeDialog(true); location.hash = 'memory'; render(); celebrate('Note saved locally.');
+    } catch (error) { if (modalState === state || modalHistory.includes(state)) { state.error = error.message; if (modalState === state) renderDialog(); } }
+  }
+});
+
+modal.addEventListener('dragover', (event) => { const zone = event.target.closest('#context-dropzone'); if (zone) { event.preventDefault(); zone.classList.add('dragover'); } });
+modal.addEventListener('dragleave', (event) => event.target.closest('#context-dropzone')?.classList.remove('dragover'));
+modal.addEventListener('drop', (event) => { if (!event.target.closest('#context-dropzone')) return; event.preventDefault(); if (event.dataTransfer.files.length !== 1) { modalState.error = 'Choose one file at a time.'; renderDialog(); } else readContext(event.dataTransfer.files[0]); });
+modal.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(); });
+modal.addEventListener('click', (event) => { if (event.target !== modal) return; const box = modal.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) closeDialog(); });
+modal.addEventListener('close', () => {
+  modalState = null; modal.innerHTML = ''; document.body.classList.remove('modal-open');
+  const controls = [...app.querySelectorAll('[data-action]')];
+  const replacement = previousFocusKey?.label ? controls.find((element) => element.getAttribute('aria-label') === previousFocusKey.label) : controls.find((element) => element.dataset.action === previousFocusKey?.action && element.dataset.value === previousFocusKey?.value);
+  (previousFocus?.isConnected ? previousFocus : replacement || document.querySelector('#main'))?.focus({ preventScroll: true });
+  previousFocus = null; previousFocusKey = null;
+});
+window.addEventListener('hashchange', () => { if (modal.open) closeDialog(true); page = getRoute(); brewing = false; clearTimeout(brewTimer); render(); window.scrollTo({ top: 0, behavior: 'instant' }); document.querySelector('#main')?.focus({ preventScroll: true }); });
+systemTheme.addEventListener('change', () => { if (profile.appearance === 'system') { applyAppearance(); render(); } });
+applyAppearance(); render();
+if (storageWarning) notify('Browser storage is unavailable. You can still explore the preview.', 'info');
