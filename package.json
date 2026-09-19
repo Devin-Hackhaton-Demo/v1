@@ -3,10 +3,15 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "apps/*"
   ],
   "scripts": {
-    "build": "tsc -b packages/db",
+    "build": "tsc -b packages/db packages/domain apps/worker",
+    "test": "vitest run",
+    "test:statemachine": "tsx --env-file=.env scripts/statemachine-test.ts",
+    "test:e2e": "tsx --env-file=.env scripts/e2e-run-test.ts",
+    "worker": "tsx --env-file=.env apps/worker/src/main.ts",
     "db:push": "dotenv -- sh -c 'supabase db push --db-url \"$SUPABASE_DB_URL\"'",
     "db:types": "dotenv -- sh -c 'supabase gen types typescript --db-url \"$SUPABASE_DB_URL\" --schema public' > packages/db/src/types.ts",
     "seed": "tsx --env-file=.env scripts/seed.ts",
@@ -16,6 +21,7 @@
     "@types/node": "^26.6.2",
     "dotenv-cli": "^11.0.0",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   }
 }
