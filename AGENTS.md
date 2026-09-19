@@ -103,3 +103,24 @@ Details and exact signatures: PROJECT_CONTEXT.md section 15. New rules:
   table is unchanged and stays GitHub/external-action-only.
 - **draft_brief validation**: `validateDraftBrief` from `@demo/domain` is the
   deterministic validator (v1); the model's own "done" claim is never proof.
+
+## MCP workstream rules (merged from feat/mcp-server, 2026-09-19 — adapted to the merged root)
+
+- Scope at merge time: local MCP server foundation — `apps/api` (Fastify + official
+  MCP SDK v2) and `packages/contracts` (shared schemas; exports compiled `dist`).
+- Root script mapping after the merge: the MCP branch's `npm test` is now
+  `npm run test:api`; `npm run check` = typecheck + contracts/api tests + build;
+  root `npm run build` builds db/domain/worker AND contracts/api; root `npm test`
+  stays vitest (domain unit tests).
+- Dependencies: `npm ci --ignore-scripts`. Pin new direct dependencies to exact
+  versions released at least 7 days ago; keep the lockfile.
+- Dev: `npm run dev`. Contracts compile on start; after contracts changes rerun
+  `npm run build -w @demo/contracts` or restart.
+- apps/api config comes from env vars: `HOST` only `127.0.0.1`; `PORT` default
+  3000; `NODE_ENV` only `development` or `test`; `LOG_LEVEL` default `info`.
+  No automatic dotenv loading in apps/api.
+- `/health` is process liveness only. `/mcp` publishes only the read-only
+  `server_info` diagnostic tool (no data storage, no external actions yet).
+- Host/Origin validation, server-side request ids, request size limits and
+  sanitized errors/logs are mandatory. Never log payloads, URL params, tokens,
+  cookies or raw upstream errors.

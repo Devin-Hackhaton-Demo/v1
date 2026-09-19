@@ -1,14 +1,24 @@
 {
   "name": "devin-demo",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "workspaces": [
     "packages/*",
     "apps/*"
   ],
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "build": "tsc -b packages/db packages/domain apps/worker",
+    "build": "tsc -b packages/db packages/domain apps/worker && npm run build -w @demo/contracts && npm run build -w @demo/api",
+    "dev": "npm run build -w @demo/contracts && npm run dev -w @demo/api",
+    "start": "npm run start -w @demo/api",
+    "typecheck": "npm run build -w @demo/contracts && tsc -p tsconfig.check.json",
     "test": "vitest run",
+    "test:contracts": "node --import tsx --test packages/contracts/test/*.test.ts",
+    "test:api": "npm run build -w @demo/contracts && node --import tsx --test packages/contracts/test/*.test.ts apps/api/test/*.test.ts",
+    "check": "npm run typecheck && npm run test:api && npm run build",
     "test:statemachine": "tsx --env-file=.env scripts/statemachine-test.ts",
     "test:e2e": "tsx --env-file=.env scripts/e2e-run-test.ts",
     "worker": "tsx --env-file=.env apps/worker/src/main.ts",
@@ -18,6 +28,7 @@
     "smoke": "tsx --env-file=.env scripts/smoke.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "^26.6.2",
     "dotenv-cli": "^11.0.0",
     "tsx": "^4.23.13",
