@@ -69,3 +69,37 @@ a Postgres kapcsolat `SUPABASE_DB_URL` (session pooler — a direkt
   `DEMO_USER_PASSWORD` az `.env`-ben.
 - A "Zárt projekt" a jogosultsági negatív tesztekhez van — az
   `owner@demo.test` felől semminek nem szabad látszania belőle.
+
+## DB domain round additions (2026-09-19, English — authoritative for new work)
+
+Details and exact signatures: PROJECT_CONTEXT.md section 15. New rules:
+
+### Commands added
+
+| Command | What it does |
+| --- | --- |
+| `npm test` | vitest unit tests (packages/domain — JCS vectors, validator) |
+| `npm run test:statemachine` | 22 live checks of the run state machine (disposable project) |
+| `npm run test:e2e` | Full loop: save → prepare → approve → worker activates → claim → complete; measures claim latency vs the 15 s target |
+| `npm run worker` | Starts the activation worker (5 s tick, service client) |
+
+### Rules
+
+- **Context writes**: use `saveContext` / `prepareRun` from `@demo/db` — they call the
+  atomic `save_context` / `prepare_run` RPCs (SECURITY INVOKER; RLS still applies).
+  Do not insert context batches with separate table writes any more.
+- **Run state transitions**: ONLY via the service-role RPCs
+  (`activate_due_runs`, `claim_run`, `heartbeat_run`, `complete_run`, `fail_run`,
+  wrapped in `@demo/db` helpers). Never update `runs.state` directly. Closure is
+  receipt-based and idempotent; artifact bytes go to Storage BEFORE `complete_run`.
+- **Canonical hashing**: use `@demo/domain` (`canonicalJson`, `canonicalHash`,
+  `computeSnapshotHash`, `computeRunInputHash`). `stableStringify` in `@demo/db`
+  is legacy for internal comparison only — never for new hashes.
+- **User-provided integration credentials** (Google/GitHub/Vercel/Composio/
+  Supabase/Notion for the MCP workstream): store via `store_user_connection`
+  (goes into Supabase Vault), read back ONLY server-side via
+  `get_user_connection_secret` (service role). Never put a credential in any
+  table column, log line or RPC response. The project-scoped `connections`
+  table is unchanged and stays GitHub/external-action-only.
+- **draft_brief validation**: `validateDraftBrief` from `@demo/domain` is the
+  deterministic validator (v1); the model's own "done" claim is never proof.

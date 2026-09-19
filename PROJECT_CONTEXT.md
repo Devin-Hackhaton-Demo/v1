@@ -292,6 +292,61 @@ A felhasználó jóváhagyott döntései alapján az adatréteg megvalósult; az
 - **Supabase a teljes platform.** Hitelesítés: Supabase Auth (Auth0 helyett; a §7 OAuth-folyam MCP-oldala későbbi kör). Adatbázis: Supabase Postgres 17, eu-west-1. A direkt DB-host IPv6-only; helyi gépről a session pooler használandó (`SUPABASE_DB_URL` az `.env`-ben).
 - **Adatelérés: közvetlen táblaírás RLS-sel**, nem kizárólag API-n át. A §5–§7 jogosultsági mátrixot RLS-policyk kényszerítik ki (member: kontextus/döntés/task/artifact írás + olvasás saját projektben; owner: plusz approval/connection/membership; állapotátmenetek és rendszer-táblák: csak service role). A `run_prepare`/`github_issue_prepare` kliensről kizárólag `awaiting_approval` állapotú INSERT lehet.
 - **Artifact bájtok a Supabase Storage privát `artifacts` bucketjében** (útvonal: `project_id/artifact_id/fájlnév`), nem bytea oszlopban; a táblában metaadat + SHA-256 + méret marad. Az 1 MiB/fájl limit DB CHECK; az 5 fájl/mentés és 20 MiB/projekt a connector rétegben.
-- **Nyílt tétel — tranzakcionalitás:** a `context_save` (bejegyzés + döntések + taskok) kliensről nem egyetlen DB-tranzakció. A revíziószámozást DB-trigger védi (sorzárolással, atomikusan), a bejegyzések UPDATE-jét trigger tiltja (service role-nak is), de félbeszakadt mentésnél a bejegyzés döntések nélkül maradhat. Ha ez problémává válik, `save_context` SECURITY DEFINER RPC vezethető be sématörés nélkül.
+- **Nyílt tétel — tranzakcionalitás:** a `context_save` (bejegyzés + döntések + taskok) kliensről nem egyetlen DB-tranzakció. A revíziószámozást DB-trigger védi (sorzárolással, atomikusan), a bejegyzések UPDATE-jét trigger tiltja (service role-nak is), de félbeszakadt mentésnél a bejegyzés döntések nélkül maradhat. Ha ez problémává válik, `save_context` SECURITY DEFINER RPC vezethető be sématörés nélkül. *(RESOLVED in section 15: the `save_context` RPC makes the batch atomic.)*
 - **Megvalósult:** `supabase/migrations/` (13 tábla, enumok, triggerek, RLS, bucket — élesítve), `packages/db` (kézzel karbantartott Database-típusok — a gen types Dockert igényelne —, kliens-factory, típusos helperök), `scripts/seed.ts` (2 teszt user: `owner@demo.test`, `member@demo.test`; „Demo projekt" + „Zárt projekt" a jogosultságteszthez; GitHub-connection rekord titoktári hivatkozással), `scripts/smoke.ts` (19 élő ellenőrzés: revízió-trigger, RLS negatív tesztek, immutabilitás, Storage-hash — mind zöld; az immutabilitás-kapu kontrollált trigger-kikapcsolással bizonyítottan elbukott, majd rollback).
 - A §13 „ne olvasd be a `.env`-et" és „még nincs engedély alkalmazáskódra" pontjait erre a körre a felhasználó explicit felülírta (DB-hozzáférés az env-ből, DB+connector implementáció jóváhagyott tervvel).
+
+## 15. v1 increment — DB domain round (2026-09-19, applied)
+
+Delivered on branch `feat/db-domain` with user approval; documentation language switches to English from here on. All schema changes are strictly additive (migrations 5–7); no existing table, policy or applied migration was modified.
+
+### 15.1 Atomic context save and validated run preparation (migration 5)
+
+Two SECURITY INVOKER RPCs (RLS still enforces every row rule inside; atomicity comes from the single function transaction). EXECUTE: `authenticated` + `service_role` only.
+
+```sql
+public.save_context(p_project_id uuid, p_source jsonb, p_coverage public.coverage_kind,
+  p_summary text, p_content_hash text, p_submitted_text text default null,
+  p_full_text_artifact_id uuid default null, p_decisions jsonb default '[]',
+  p_tasks jsonb default '[]') returns jsonb
+  -- -> {entry, decisions:[...], tasks:[...], context_revision}
+  -- p_source = {kind, label, conversation_ref?, occurred_at?}
+  -- p_decisions[] = {key, value, source_excerpt?, supersedes_decision_ids?}
+  -- p_tasks[] = {title, required_decision_keys?, input_artifact_ids?}
+
+public.prepare_run(p_project_id uuid, p_task_id uuid, p_context_revision integer,
+  p_context_entry_ids uuid[], p_payload_hash text, p_snapshot_hash text default null,
+  p_run_at timestamptz default null) returns jsonb  -- -> full run row
+```
+
+Error contract (raised as exception messages): `NOT_FOUND` (foreign/unknown project or task — no existence leak), `VALIDATION_ERROR: <detail>` (bad revision/entries/run_at/hash shape), `DECISION_CONFLICT: <key>`, `CONTEXT_INCOMPLETE: <key>` (required keys resolved over the SELECTED entries only). Hashes are computed by the TypeScript layer (`@demo/domain`, RFC 8785) and re-verified at closure; plpgsql cannot reproduce JCS reliably. `run_at` window: at most 24 h ahead, 10 s past grace. The MCP server should call these RPCs (or the `saveContext`/`prepareRun` helpers in `@demo/db`, which wrap them) instead of direct table writes.
+
+### 15.2 Run state machine (migration 6) — service-role only
+
+New table `run_receipts` (RLS on, zero policies; unique `(run_id, attempt_id, result_key)`, payload-hash fingerprint, stored response). Functions (SECURITY DEFINER, EXECUTE only `service_role`): `activate_due_runs()`, `claim_run(preset)`, `heartbeat_run(run_id, attempt_id, lease_token)`, `complete_run(run_id, attempt_id, lease_token, result_key, payload_hash, artifact, checks)`, `fail_run(run_id, attempt_id, lease_token, result_key, error_code, safe_message, retryable)`.
+
+Semantics per section 8: DB-time based activation (approval-bound via payload_hash; expired approval → `blocked` with `APPROVAL_EXPIRED`), `FOR UPDATE SKIP LOCKED` claim with lease 90 s / max 2 attempts (plaintext lease token returned exactly once, only its SHA-256 stored), heartbeat extension, receipt-based idempotent closure (identical retry returns the identical receipt even after lease expiry; different payload → `IDEMPOTENCY_CONFLICT`; a new closure requires a live lease and the current attempt). Artifact bytes are uploaded to Storage by the service caller BEFORE `complete_run`; the function records metadata and links run+task+artifact+receipt in one transaction. Gates: `npm run test:statemachine` (22 checks incl. parallel claim, stale-attempt exclusion, attempt cap, expired approval; guard-weakening proven to fail the right gates), `npm run test:e2e` (full loop with the real worker; measured claim latency 1.98 s vs the 15 s section-10 target).
+
+### 15.3 User-scoped provider connections with Vault (migration 7)
+
+For the MCP integrations workstream (Google, GitHub, Vercel, Composio, Supabase, Notion — user-provided, persistent). New enum `provider_kind` and table `user_connections` (user-scoped, select-own-rows RLS only, NO client write policies). Credentials live in Supabase Vault; the table stores only the `vault.secrets.id` reference, and RPC responses strip even that. Functions:
+
+```sql
+public.store_user_connection(p_provider public.provider_kind, p_secret text,
+  p_label text default '', p_scopes text[] default '{}',
+  p_metadata jsonb default '{}') returns jsonb   -- authenticated + service_role
+public.revoke_user_connection(p_connection_id uuid) returns jsonb  -- authenticated + service_role
+public.get_user_connection_secret(p_connection_id uuid) returns text  -- SERVICE ROLE ONLY
+```
+
+Store is an upsert on `(user_id, provider, label)`: active row → Vault secret rotated in place; revoked row → re-activated with a fresh Vault secret. Revoke deletes the Vault row (readback then raises NOT_FOUND). The MCP backend reads credentials server-side only; user-facing clients can never read a secret back. Known limitation (verified): per-function `log_statement` opt-out is not installable on hosted Supabase (SUSET) — project-level statement logging must stay off (default `log_statement=ddl` complies). The project-scoped GitHub `connections` table is unchanged; external actions keep using it.
+
+### 15.4 Shared packages and worker
+
+- `packages/domain` (`@demo/domain`): `canonicalJson` (RFC 8785/JCS, pinned to the RFC test vectors), `sha256Hex`/`canonicalHash`, `ContextSnapshotV1`/`RunInputV1` types with order-normalizing `computeSnapshotHash`/`computeRunInputHash`, `RUN_LIMITS_V1` (90/30/180 s, 2 attempts), and `validateDraftBrief` (exact first H1, exact top-level bullet count, literal marker, 32 KiB cap; `validator_version='v1'`; fenced code blocks ignored). 47 vitest tests.
+- `packages/db` hashing cut over to `@demo/domain` (`canonicalHash` with explicitly normalized nulls); `stableStringify` remains only for internal decision-value comparison and must not be used for new hashes.
+- `apps/worker`: 5 s activation loop calling `activate_due_runs` with the service client; secret-free JSON-line logs; exponential backoff after repeated failures; graceful SIGTERM/SIGINT shutdown. Start: `npm run worker`.
+
+### 15.5 Commands and gates added
+
+`npm test` (domain unit tests), `npm run test:statemachine`, `npm run test:e2e`, `npm run worker`. Full gate suite at round close: build green, vitest 47/47, smoke 40 PASS, statemachine 22 PASS, e2e 20 PASS. All live tests run in disposable projects and clean up after themselves.
