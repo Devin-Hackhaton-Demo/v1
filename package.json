@@ -1,0 +1,21 @@
+{
+  "name": "devin-demo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/db",
+    "db:push": "dotenv -- sh -c 'supabase db push --db-url \"$SUPABASE_DB_URL\"'",
+    "db:types": "dotenv -- sh -c 'supabase gen types typescript --db-url \"$SUPABASE_DB_URL\" --schema public' > packages/db/src/types.ts",
+    "seed": "tsx --env-file=.env scripts/seed.ts",
+    "smoke": "tsx --env-file=.env scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "dotenv-cli": "^11.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}

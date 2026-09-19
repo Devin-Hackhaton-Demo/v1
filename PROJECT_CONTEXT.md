@@ -5,7 +5,7 @@ Az alábbi komponensek és interfészek tervezettek, még nincsenek megvalósít
 
 ## 1. Cél és ellenőrzött kiindulás
 
-A felhasználó a meglévő ChatGPT-ben beszélget. Saját MCP-szerverünk az explicit átadott kontextust tárolja, projekthez kapcsolja, és hozzáférhetővé teszi egy másik chatnek vagy terminálos végrehajtónak. A végrehajtás eredménye ugyanitt kérdezhető vissza.
+A felhasználó a meglévő ChatGPT-ben vagy más llm-el beszélget. Saját MCP-szerverünk az explicit átadott kontextust tárolja, projekthez kapcsolja, és hozzáférhetővé teszi egy másik chatnek vagy terminálos végrehajtónak. A végrehajtás eredménye ugyanitt kérdezhető vissza.
 
 A repó ellenőrzött kiindulása: `main`, `4e0cc40`; üres `README.md`, valamint `.gitignore`, benne `.env`. Alkalmazáskód, csomagmanifest, teszt, adatmodell és futtatási konfiguráció nincs. A helyi `.env` tartalmát nem olvastuk. A tervezés során ez a dokumentum az egyetlen hozzáadott fájl.
 
@@ -284,3 +284,14 @@ Integrációs sorrend, naptári ígéret nélkül:
 - Az interfészváltozást előbb rögzítsd a contracts csomagban és ebben a fájlban; utána módosítsd mindkét implementációt.
 - A dokumentációban ismertetett szolgáltatói képességeket implementációkor újra ellenőrizd, ha megváltoztak vagy eltérnek a tényleges klienstől.
 - Átadáskor külön nevezd meg: elkészült kód, lefutott contract/integrációs teszt, tényleges ChatGPT-demó, tényleges CLI-futás és külső issue-visszaolvasás. A hiányzó bizonyíték maradjon nyílt tétel.
+
+## 14. v1 implementációs eltérések (2026-09-19, DB-kör)
+
+A felhasználó jóváhagyott döntései alapján az adatréteg megvalósult; az alábbi pontokon tér el a fenti tervtől:
+
+- **Supabase a teljes platform.** Hitelesítés: Supabase Auth (Auth0 helyett; a §7 OAuth-folyam MCP-oldala későbbi kör). Adatbázis: Supabase Postgres 17, eu-west-1. A direkt DB-host IPv6-only; helyi gépről a session pooler használandó (`SUPABASE_DB_URL` az `.env`-ben).
+- **Adatelérés: közvetlen táblaírás RLS-sel**, nem kizárólag API-n át. A §5–§7 jogosultsági mátrixot RLS-policyk kényszerítik ki (member: kontextus/döntés/task/artifact írás + olvasás saját projektben; owner: plusz approval/connection/membership; állapotátmenetek és rendszer-táblák: csak service role). A `run_prepare`/`github_issue_prepare` kliensről kizárólag `awaiting_approval` állapotú INSERT lehet.
+- **Artifact bájtok a Supabase Storage privát `artifacts` bucketjében** (útvonal: `project_id/artifact_id/fájlnév`), nem bytea oszlopban; a táblában metaadat + SHA-256 + méret marad. Az 1 MiB/fájl limit DB CHECK; az 5 fájl/mentés és 20 MiB/projekt a connector rétegben.
+- **Nyílt tétel — tranzakcionalitás:** a `context_save` (bejegyzés + döntések + taskok) kliensről nem egyetlen DB-tranzakció. A revíziószámozást DB-trigger védi (sorzárolással, atomikusan), a bejegyzések UPDATE-jét trigger tiltja (service role-nak is), de félbeszakadt mentésnél a bejegyzés döntések nélkül maradhat. Ha ez problémává válik, `save_context` SECURITY DEFINER RPC vezethető be sématörés nélkül.
+- **Megvalósult:** `supabase/migrations/` (13 tábla, enumok, triggerek, RLS, bucket — élesítve), `packages/db` (kézzel karbantartott Database-típusok — a gen types Dockert igényelne —, kliens-factory, típusos helperök), `scripts/seed.ts` (2 teszt user: `owner@demo.test`, `member@demo.test`; „Demo projekt" + „Zárt projekt" a jogosultságteszthez; GitHub-connection rekord titoktári hivatkozással), `scripts/smoke.ts` (19 élő ellenőrzés: revízió-trigger, RLS negatív tesztek, immutabilitás, Storage-hash — mind zöld; az immutabilitás-kapu kontrollált trigger-kikapcsolással bizonyítottan elbukott, majd rollback).
+- A §13 „ne olvasd be a `.env`-et" és „még nincs engedély alkalmazáskódra" pontjait erre a körre a felhasználó explicit felülírta (DB-hozzáférés az env-ből, DB+connector implementáció jóváhagyott tervvel).
