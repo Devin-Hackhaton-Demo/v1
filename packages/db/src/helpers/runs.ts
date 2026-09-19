@@ -1,6 +1,6 @@
+import { canonicalHash } from '@demo/domain';
 import type { DbClient } from '../client.ts';
 import type { Tables } from '../types.ts';
-import { sha256Hex, stableStringify } from './hash.ts';
 
 export interface PrepareRunInput {
   projectId: string;
@@ -23,19 +23,21 @@ export interface PrepareRunInput {
  * (DECISION_CONFLICT / CONTEXT_INCOMPLETE) in one transaction. All further
  * state transitions stay server-side (service role).
  *
- * payload_hash is still computed here (sha256Hex + stableStringify); a later
- * phase swaps in the RFC 8785 canonical JSON from the domain package.
+ * payload_hash is the RFC 8785 (JCS) canonical hash from @demo/domain.
  */
 export async function prepareRun(client: DbClient, input: PrepareRunInput): Promise<Tables<'runs'>> {
-  const payloadHash = await sha256Hex(
-    stableStringify({
-      task_id: input.taskId,
-      context_revision: input.contextRevision,
-      context_entry_ids: [...input.contextEntryIds].sort(),
-      preset: 'draft_brief',
-      run_at: input.runAt ?? null,
-    }),
-  );
+  // RFC 8785 hash over the v1 CLIENT payload only. The full RunInputV1 hash
+  // (computeRunInputHash in @demo/domain) is the API-layer contract for the
+  // future run_prepare snapshot; this helper deliberately hashes just the
+  // fields the client submits. canonicalJson throws on undefined, so the
+  // optional run_at is normalized to an explicit null.
+  const payloadHash = await canonicalHash({
+    task_id: input.taskId,
+    context_revision: input.contextRevision,
+    context_entry_ids: [...input.contextEntryIds].sort(),
+    preset: 'draft_brief',
+    run_at: input.runAt ?? null,
+  });
 
   const { data, error } = await client.rpc('prepare_run', {
     p_project_id: input.projectId,

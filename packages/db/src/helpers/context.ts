@@ -1,6 +1,7 @@
+import { canonicalHash } from '@demo/domain';
 import type { DbClient } from '../client.ts';
 import type { Enums, Tables } from '../types.ts';
-import { sha256Hex, stableStringify } from './hash.ts';
+import { stableStringify } from './hash.ts';
 
 export interface DecisionInput {
   key: string;
@@ -47,18 +48,25 @@ export interface SaveContextResult {
  * so no orphan entry can remain. The revision trigger still assigns
  * entry.revision atomically.
  *
- * content_hash is still computed here (sha256Hex + stableStringify); a later
- * phase swaps in the RFC 8785 canonical JSON from the domain package.
+ * content_hash is the RFC 8785 (JCS) canonical hash from @demo/domain.
  */
 export async function saveContext(client: DbClient, input: SaveContextInput): Promise<SaveContextResult> {
-  const contentHash = await sha256Hex(
-    stableStringify({
-      source: input.source,
-      coverage: input.coverage,
-      submitted_text: input.submittedText ?? null,
-      summary: input.summary,
-    }),
-  );
+  // Canonical content-hash shape v1: RFC 8785 over exactly these fields
+  // ({source, coverage, submitted_text, summary}). canonicalJson THROWS on
+  // undefined (it never silently drops fields the way stableStringify did),
+  // so every optional field is normalized to an explicit null and the
+  // source sub-object is rebuilt field-by-field.
+  const contentHash = await canonicalHash({
+    source: {
+      kind: input.source.kind,
+      label: input.source.label,
+      conversation_ref: input.source.conversationRef ?? null,
+      occurred_at: input.source.occurredAt ?? null,
+    },
+    coverage: input.coverage,
+    submitted_text: input.submittedText ?? null,
+    summary: input.summary,
+  });
 
   const { data, error } = await client.rpc('save_context', {
     p_project_id: input.projectId,

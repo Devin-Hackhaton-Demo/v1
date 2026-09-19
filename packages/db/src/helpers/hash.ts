@@ -8,8 +8,12 @@ export async function sha256Hex(data: string | Uint8Array): Promise<string> {
 }
 
 /**
- * Determinisztikus JSON-kulcsrendezés hashhez (egyszerűsített kanonikus
- * forma; a teljes RFC 8785-öt a contracts csomag hozza majd).
+ * Deterministic key-sorted JSON (simplified canonical form). Kept ONLY for
+ * decision-value comparison in getContext. Hashing of contract payloads
+ * (content_hash, payload_hash) now lives in @demo/domain (RFC 8785 via
+ * canonicalJson/canonicalHash) — do NOT use this simplified form for new
+ * hashes: unlike canonicalJson it silently drops undefined values, so two
+ * semantically different inputs can serialize identically.
  */
 export function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {

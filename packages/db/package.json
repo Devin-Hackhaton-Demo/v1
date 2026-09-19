@@ -12,6 +12,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
+    "@demo/domain": "0.1.0",
     "@supabase/supabase-js": "^2.116.0"
   }
 }
