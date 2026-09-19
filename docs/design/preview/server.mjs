@@ -4,22 +4,21 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { createRateLimiter, errorEnvelope, handleChatRequest, MAX_BODY_BYTES, MAX_CHAT_BODY_BYTES } from '../../../api/_lib/anthropic.mjs';
 import {
+  bearerToken,
   CHECK_RATE_LIMIT,
   handleCheckConnectionRequest,
+  handleComposioKeyCheck,
   handleCreateConnectionRequest,
   handleListConnectionsRequest,
+  handleLoginRequest,
+  handleRefreshRequest,
   handleRevokeConnectionRequest,
+  LOGIN_RATE_LIMIT,
 } from '../../../api/_lib/connections.mjs';
-import { handleDemoAuthRequest, requireDemoAuth } from '../../../api/_lib/demo-auth.mjs';
 
 const files = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
-  ['/app', ['index.html', 'text/html; charset=utf-8']],
-  ['/login', ['auth/index.html', 'text/html; charset=utf-8']],
-  ['/auth/styles.css', ['auth/styles.css', 'text/css; charset=utf-8']],
-  ['/auth/app.mjs', ['auth/app.mjs', 'text/javascript; charset=utf-8']],
-  ['/session.mjs', ['session.mjs', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
   ['/tokens.css', ['../tokens.css', 'text/css; charset=utf-8']],
   ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
@@ -88,7 +87,6 @@ function guardRateLimit(request, response, rateLimiter) {
 const BODY_LIMIT_MESSAGE = 'Request body may be at most 256 KiB.';
 
 async function handleChatEndpoint(request, response, env, fetchImpl, rateLimiter) {
-  if (!await requireDemoAuth(request, response, { env, fetchImpl })) return;
   if (!guardPost(request, response, 'Use POST to talk to /api/chat.')) return;
   if (!guardRateLimit(request, response, rateLimiter)) return;
   // /api/chat alone accepts up to 4 MiB so base64 screenshots fit.
@@ -100,16 +98,26 @@ async function handleChatEndpoint(request, response, env, fetchImpl, rateLimiter
 
 // The same six user-connection routes the Vercel functions expose
 // (api/auth/*.mjs, api/connections/*.mjs), wired against the shared handlers.
-async function handleApiRoute(pathname, request, response, { env, fetchImpl, checkRateLimiter }) {
-  if (pathname.startsWith('/api/auth/')) {
-    await handleDemoAuthRequest(request, response, { env, fetchImpl });
+async function handleApiRoute(pathname, request, response, { env, fetchImpl, loginRateLimiter, checkRateLimiter }) {
+  if (pathname === '/api/auth/login') {
+    if (!guardPost(request, response, 'Use POST to sign in.')) return true;
+    if (!guardRateLimit(request, response, loginRateLimiter)) return true;
+    const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
+    if (!read.ok) return true;
+    const { status, payload } = await handleLoginRequest(read.body, env, fetchImpl);
+    sendJson(response, status, payload);
     return true;
   }
-  if (!['/api/connections', '/api/connections/revoke', '/api/connections/check'].includes(pathname)) return false;
-  const session = await requireDemoAuth(request, response, { env, fetchImpl });
-  if (!session) return true;
-  const jwt = session.accessToken;
+  if (pathname === '/api/auth/refresh') {
+    if (!guardPost(request, response, 'Use POST to refresh a session.')) return true;
+    const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
+    if (!read.ok) return true;
+    const { status, payload } = await handleRefreshRequest(read.body, env, fetchImpl);
+    sendJson(response, status, payload);
+    return true;
+  }
   if (pathname === '/api/connections') {
+    const jwt = bearerToken(request.headers.authorization);
     if (request.method === 'GET') {
       const { status, payload } = await handleListConnectionsRequest(jwt, env, fetchImpl);
       sendJson(response, status, payload);
@@ -129,7 +137,17 @@ async function handleApiRoute(pathname, request, response, { env, fetchImpl, che
     if (!guardPost(request, response, 'Use POST to revoke a connection.')) return true;
     const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
     if (!read.ok) return true;
+    const jwt = bearerToken(request.headers.authorization);
     const { status, payload } = await handleRevokeConnectionRequest(jwt, read.body, env, fetchImpl);
+    sendJson(response, status, payload);
+    return true;
+  }
+  if (pathname === '/api/composio/check') {
+    if (!guardPost(request, response, 'Use POST to check a Composio API key.')) return true;
+    if (!guardRateLimit(request, response, checkRateLimiter)) return true;
+    const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
+    if (!read.ok) return true;
+    const { status, payload } = await handleComposioKeyCheck(read.body, fetchImpl);
     sendJson(response, status, payload);
     return true;
   }
@@ -138,6 +156,7 @@ async function handleApiRoute(pathname, request, response, { env, fetchImpl, che
     if (!guardRateLimit(request, response, checkRateLimiter)) return true;
     const read = await readJsonBody(request, response, MAX_BODY_BYTES, BODY_LIMIT_MESSAGE);
     if (!read.ok) return true;
+    const jwt = bearerToken(request.headers.authorization);
     const { status, payload } = await handleCheckConnectionRequest(jwt, read.body, env, fetchImpl);
     sendJson(response, status, payload);
     return true;
@@ -149,9 +168,9 @@ export function createPreviewServer({
   env = process.env,
   fetchImpl = fetch,
   rateLimiter = createRateLimiter(),
+  loginRateLimiter = createRateLimiter(LOGIN_RATE_LIMIT),
   checkRateLimiter = createRateLimiter(CHECK_RATE_LIMIT),
 } = {}) {
-  const runtimeEnv = { ...env, APP_ORIGIN: env.APP_ORIGIN || `http://127.0.0.1:${env.PORT || 4173}` };
   return createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -161,10 +180,10 @@ export function createPreviewServer({
     let pathname;
     try { pathname = new URL(request.url, 'http://127.0.0.1').pathname; } catch { response.writeHead(400).end(); return; }
     if (pathname === '/api/chat') {
-      await handleChatEndpoint(request, response, runtimeEnv, fetchImpl, rateLimiter);
+      await handleChatEndpoint(request, response, env, fetchImpl, rateLimiter);
       return;
     }
-    if (pathname.startsWith('/api/') && await handleApiRoute(pathname, request, response, { env: runtimeEnv, fetchImpl, checkRateLimiter })) {
+    if (pathname.startsWith('/api/') && await handleApiRoute(pathname, request, response, { env, fetchImpl, loginRateLimiter, checkRateLimiter })) {
       return;
     }
     if (!['GET', 'HEAD'].includes(request.method)) {

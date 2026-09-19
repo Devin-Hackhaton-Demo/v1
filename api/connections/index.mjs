@@ -1,13 +1,10 @@
 import { errorEnvelope } from '../_lib/anthropic.mjs';
-import { handleCreateConnectionRequest, handleListConnectionsRequest } from '../_lib/connections.mjs';
-import { requireDemoAuth } from '../_lib/demo-auth.mjs';
+import { bearerToken, handleCreateConnectionRequest, handleListConnectionsRequest } from '../_lib/connections.mjs';
 import { guardBodySize, parsedBody } from '../_lib/http.mjs';
 
 export default async function handler(request, response) {
   response.setHeader('Cache-Control', 'no-store');
-  const session = await requireDemoAuth(request, response);
-  if (!session) return;
-  const jwt = session.accessToken;
+  const jwt = bearerToken(request.headers.authorization);
   if (request.method === 'GET') {
     const { status, payload } = await handleListConnectionsRequest(jwt, process.env);
     response.status(status).json(payload);

@@ -363,3 +363,33 @@ test('network failures and timeouts surface as retryable errors, never success',
   assert.equal(unreadable.ok, false);
   assert.equal(unreadable.retryable, true);
 });
+
+test('composio state normalizes stored data and never trusts unknown fields', async () => {
+  const { normalizeComposio, maskKey } = await import('./state.mjs');
+  assert.deepEqual(normalizeComposio(null), { apiKey: '', status: 'unchecked', account: '', checkedAt: '' });
+  assert.deepEqual(normalizeComposio({ apiKey: 'ak_x', status: 'healthy', account: '2 connected account(s)', checkedAt: '2026-09-19T12:00:00.000Z', extra: 1 }), { apiKey: 'ak_x', status: 'healthy', account: '2 connected account(s)', checkedAt: '2026-09-19T12:00:00.000Z' });
+  assert.equal(normalizeComposio({ apiKey: 'k', status: 'hacked' }).status, 'unchecked');
+  assert.equal(normalizeComposio({ apiKey: 'x'.repeat(4097) }).apiKey, '');
+  assert.equal(maskKey('ak_abcdefgh1234'), '••••1234');
+  assert.equal(maskKey('abc'), '••••');
+});
+
+test('requestComposioCheck posts only the key and maps every outcome', async () => {
+  const { requestComposioCheck } = await import('./state.mjs');
+  const calls = [];
+  const reply = (status, payload) => async (url, init) => { calls.push({ url, init }); return new Response(JSON.stringify(payload), { status }); };
+  const healthy = await requestComposioCheck('ak_key', { fetchImpl: reply(200, { ok: true, data: { provider: 'composio', healthy: true, account: '3 connected account(s)' } }) });
+  assert.equal(healthy.status, 'healthy');
+  assert.equal(healthy.account, '3 connected account(s)');
+  assert.ok(Number.isFinite(Date.parse(healthy.checkedAt)));
+  assert.equal(calls[0].url, '/api/composio/check');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { apiKey: 'ak_key' });
+  assert.equal((await requestComposioCheck('k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unauthorized' } }) })).status, 'unauthorized');
+  assert.equal((await requestComposioCheck('k', { fetchImpl: reply(200, { ok: true, data: { healthy: false, reason: 'unreachable' } }) })).status, 'unreachable');
+  const limited = await requestComposioCheck('k', { fetchImpl: reply(429, { ok: false, error: { code: 'LIMIT_EXCEEDED', message: 'Too many requests. Please wait a moment and try again.' } }) });
+  assert.equal(limited.status, 'error');
+  assert.match(limited.message, /Too many requests/);
+  const offline = await requestComposioCheck('k', { fetchImpl: async () => { throw new Error('offline'); } });
+  assert.equal(offline.status, 'error');
+  assert.equal((await requestComposioCheck('', { fetchImpl: async () => { throw new Error('must not call'); } })).status, 'error');
+});

@@ -1,5 +1,4 @@
 import { createRateLimiter, errorEnvelope, handleChatRequest, MAX_CHAT_BODY_BYTES } from './_lib/anthropic.mjs';
-import { requireDemoAuth } from './_lib/demo-auth.mjs';
 
 // Per-warm-instance limiter: each Vercel instance counts independently, so the
 // effective global limit scales with concurrent warm instances. Accepted for v1.
@@ -13,7 +12,6 @@ function clientIp(request) {
 
 export default async function handler(request, response) {
   response.setHeader('Cache-Control', 'no-store');
-  if (!await requireDemoAuth(request, response)) return;
   if (request.method !== 'POST') {
     response.setHeader('Allow', 'POST');
     response.status(405).json(errorEnvelope('VALIDATION_ERROR', 'Use POST to talk to /api/chat.', false));

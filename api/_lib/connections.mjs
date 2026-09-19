@@ -278,3 +278,14 @@ export async function handleCheckConnectionRequest(jwt, body, env, fetchImpl = f
   const data = await runHealthCheck(provider, secret, fetchImpl);
   return { status: 200, payload: successEnvelope(data) };
 }
+
+// Stateless Composio key check for the auth-free preview: the key arrives in
+// the request body, is used once for the provider health call and is never
+// stored, logged or echoed. Only the non-secret health summary is returned.
+export function handleComposioKeyCheck(body, fetchImpl = fetch) {
+  if (!isPlainObject(body) || Object.keys(body).some((key) => key !== 'apiKey')
+    || typeof body.apiKey !== 'string' || body.apiKey.length === 0 || body.apiKey.length > MAX_SECRET_CHARS) {
+    return Promise.resolve(validationError(`Request body must be a JSON object with an "apiKey" string of 1 to ${MAX_SECRET_CHARS} characters.`));
+  }
+  return runHealthCheck('composio', body.apiKey, fetchImpl).then((data) => ({ status: 200, payload: successEnvelope(data) }));
+}

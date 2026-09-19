@@ -660,3 +660,51 @@ test('connection endpoints answer 503 when the Supabase env is not configured', 
     assert.equal(payload.error.message, 'Connections backend is not configured.');
   }
 });
+
+// --- Stateless Composio key check (no auth, no storage) ----------------------
+
+const COMPOSIO_URL = 'https://backend.composio.dev/api/v3.1/connected_accounts?limit=1';
+
+test('POST /api/composio/check verifies the key against Composio and never echoes it', async (t) => {
+  const apiKey = 'ak_fictional_composio_test_key';
+  const calls = [];
+  const base = await serve(t, { env: {}, fetchImpl: async (url, init = {}) => { calls.push({ url: String(url), init }); return jsonResponse({ items: [], total_items: 3 }); } });
+  const response = await postJson(base, '/api/composio/check', { apiKey });
+  assert.equal(response.status, 200);
+  const raw = await response.text();
+  assert.ok(!raw.includes(apiKey), 'the response never contains the key');
+  assert.deepEqual(JSON.parse(raw).data, { provider: 'composio', healthy: true, account: '3 connected account(s)' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, COMPOSIO_URL);
+  assert.equal(calls[0].init.headers['x-api-key'], apiKey);
+});
+
+test('POST /api/composio/check reports unauthorized and unreachable without leaking upstream details', async (t) => {
+  const unauthorized = await serve(t, { env: {}, fetchImpl: async () => jsonResponse({ error: 'fictional upstream detail' }, 401) });
+  const denied = await (await postJson(unauthorized, '/api/composio/check', { apiKey: 'bad-key' })).json();
+  assert.deepEqual(denied.data, { provider: 'composio', healthy: false, reason: 'unauthorized' });
+  assert.doesNotMatch(JSON.stringify(denied), /fictional upstream|bad-key/);
+  const offline = await serve(t, { env: {}, fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } });
+  const unreachable = await (await postJson(offline, '/api/composio/check', { apiKey: 'any-key' })).json();
+  assert.deepEqual(unreachable.data, { provider: 'composio', healthy: false, reason: 'unreachable' });
+});
+
+test('POST /api/composio/check rejects invalid bodies and non-POST methods before any network call', async (t) => {
+  const base = await serve(t, { env: {}, fetchImpl: neverFetch });
+  for (const body of [{}, { apiKey: '' }, { apiKey: 42 }, { apiKey: 'x'.repeat(4097) }, { apiKey: 'x', extra: true }]) {
+    const response = await postJson(base, '/api/composio/check', body);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, 'VALIDATION_ERROR');
+  }
+  const get = await fetch(base + '/api/composio/check');
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get('allow'), 'POST');
+});
+
+test('POST /api/composio/check rate limits the 11th rapid check from the same IP', async (t) => {
+  const base = await serve(t, { env: {}, fetchImpl: async () => jsonResponse({ total_items: 0 }) });
+  for (let i = 0; i < 10; i += 1) assert.equal((await postJson(base, '/api/composio/check', { apiKey: 'k' })).status, 200);
+  const limited = await postJson(base, '/api/composio/check', { apiKey: 'k' });
+  assert.equal(limited.status, 429);
+  assert.equal((await limited.json()).error.code, 'LIMIT_EXCEEDED');
+});

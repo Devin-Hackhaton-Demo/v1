@@ -365,3 +365,40 @@ export const EXPORT_GUIDES = {
     note: 'Individual Free, Pro and Max accounts can export. Team and Enterprise exports require the Primary Owner. A copied memory summary may be incomplete.',
   },
 };
+
+// Composio API key the user adds on the Connectors page. The preview has no
+// accounts, so the key lives only in this browser's localStorage; the server
+// uses it once per check and never stores it.
+export const COMPOSIO_KEY = 'coffeenator-preview-composio-v1';
+const COMPOSIO_STATUSES = ['unchecked', 'healthy', 'unauthorized', 'unreachable'];
+const MAX_COMPOSIO_KEY_CHARS = 4096;
+
+export function normalizeComposio(input) {
+  const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const apiKey = typeof value.apiKey === 'string' && value.apiKey.length <= MAX_COMPOSIO_KEY_CHARS ? value.apiKey.trim() : '';
+  return {
+    apiKey,
+    status: apiKey ? pick(value.status, COMPOSIO_STATUSES, 'unchecked') : 'unchecked',
+    account: apiKey && typeof value.account === 'string' ? value.account.slice(0, 120) : '',
+    checkedAt: apiKey && typeof value.checkedAt === 'string' && Number.isFinite(Date.parse(value.checkedAt)) ? value.checkedAt : '',
+  };
+}
+
+export const maskKey = (key) => `••••${typeof key === 'string' && key.length > 8 ? key.slice(-4) : ''}`;
+
+export async function requestComposioCheck(apiKey, { fetchImpl = globalThis.fetch } = {}) {
+  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!key || key.length > MAX_COMPOSIO_KEY_CHARS) return { status: 'error', message: 'Enter a Composio API key.' };
+  let response;
+  try { response = await fetchImpl('/api/composio/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiKey: key }) }); }
+  catch { return { status: 'error', message: 'Could not reach the server. Check your connection and try again.' }; }
+  let payload = null;
+  try { payload = await response.json(); } catch {}
+  if (!response.ok || payload?.ok !== true) {
+    return { status: 'error', message: boundedErrorMessage(payload?.error?.message, 'The key could not be checked. Please try again.') };
+  }
+  const data = payload.data || {};
+  const checkedAt = new Date().toISOString();
+  if (data.healthy === true) return { status: 'healthy', account: typeof data.account === 'string' ? data.account.slice(0, 120) : '', checkedAt };
+  return { status: data.reason === 'unauthorized' ? 'unauthorized' : 'unreachable', account: '', checkedAt };
+}
